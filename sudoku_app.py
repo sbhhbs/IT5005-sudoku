@@ -12,7 +12,8 @@ from sudoku_solver import (
     pl_bc_entails,
 )
 
-st.title('Sudoku Solver')
+st.set_page_config(page_title='Group 23 - Sudoku Solver')
+st.title('Group 23 - Sudoku Solver')
 
 with open('puzzles.json') as f:
     pool = json.load(f)

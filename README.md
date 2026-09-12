@@ -1,4 +1,6 @@
-# IT5005 Sudoku — group assignment starter
+# IT5005 Sudoku — Group 23
+
+Live app: [Group 23 - Sudoku Solver](https://it5005-group23-sudoku.streamlit.app)
 
 A shared starting point for four group members. **The assignment is not implemented yet.** The original solver stubs, Streamlit TODOs, and conceptual-answer placeholders are intentionally preserved.
 
@@ -14,7 +16,7 @@ pip install -r requirements.txt
 streamlit run sudoku_app.py
 ```
 
-The starter currently displays only **Sudoku Solver**. This is expected: solving, puzzle selection, queries, and tutor mode are group implementation tasks. Calling an unimplemented solver function raises `NotImplementedError`.
+The starter currently displays only **Group 23 - Sudoku Solver**. This is expected: solving, puzzle selection, queries, and tutor mode are group implementation tasks. Calling an unimplemented solver function raises `NotImplementedError`.
 
 For the notebook:
 
@@ -30,14 +32,14 @@ jupyter lab Sudoku_Assignment.ipynb
 | Repository | `sbhhbs/IT5005-sudoku` |
 | Branch | `main` |
 | Main file path | `sudoku_app.py` |
-| App URL | Leave blank, or choose an available name such as `it5005-sudoku-sbhhbs` |
+| App URL | [https://it5005-group23-sudoku.streamlit.app](https://it5005-group23-sudoku.streamlit.app) |
 | Advanced settings: Python | `3.12` |
 
 Alternatively, paste this file URL into the deployment form:
 
 https://github.com/sbhhbs/IT5005-sudoku/blob/main/sudoku_app.py
 
-Deploy the starter now to verify hosting. Future merges to `main` will update the deployed app. After deployment, record the actual app URL in the notebook's designated section. The sample subdomain above is a suggestion, not a deployed URL.
+The starter is deployed at the URL above, which is also recorded in the notebook. Streamlit tracks `main`; pushes and merged pull requests to that branch should update the app automatically.
 
 ## Git collaboration
 
