@@ -12,7 +12,7 @@ import time
 
 import streamlit as st
 import sudoku_solver
-from logic_ import PropKB, PropDefiniteKB, Expr, prop_symbols, to_cnf, conjuncts
+from logic_ import PropKB, PropDefiniteKB, Expr, prop_symbols, to_cnf, conjuncts, disjuncts
 from sudoku_solver import (
     atom, build_definite_kb, build_general_kb, solve_full_grid_fc,
     solve_full_grid_bc, pl_bc_entails,
@@ -37,6 +37,16 @@ h1,h2,h3 {color:#243d33; letter-spacing:-.035em;}
 .sudoku td.support {background:#dceee7; box-shadow:inset 0 0 0 1px #7bad98;}
 .board-legend {color:#597165; text-align:center; font-size:13px; line-height:1.8; margin:12px 0 18px;}
 .board-legend b {font-weight:700;}
+.st-key-board_grid {max-width:540px; margin:12px auto; gap:0;}
+.st-key-board_grid [data-testid="stVerticalBlock"] {gap:0;}
+.st-key-board_grid [data-testid="stHorizontalBlock"] {gap:0; flex-wrap:nowrap;}
+.st-key-board_grid [data-testid="stColumn"] {min-width:0 !important;}
+.st-key-board_grid button {width:100%; min-height:0; height:clamp(30px,4vw,49px); padding:0;
+ border:1px solid #d6dfd6; border-radius:0; background:white; color:#197352;}
+.st-key-board_grid button p {font-size:21px; font-weight:600;}
+.st-key-board_grid button:hover {background:#e4eee7; border-color:#416152;}
+.st-key-board_grid button:focus-visible {outline:3px solid #197352; outline-offset:-4px;}
+.grid-index {text-align:center; color:#698173; font:500 12px/1.5 sans-serif; padding:6px 0;}
 @media(max-width:600px) {
  .block-container {padding-top:1.3rem;}
  .sudoku td {height:33px; font-size:18px;}
@@ -234,40 +244,170 @@ def board_html(values, givens, n, box_h, box_w, target=None, support=(), label='
 def clear_results():
     """Clear puzzle-dependent state before widgets are reconstructed."""
     for key in ('solution_result', 'query_result', 'solve_feedback', 'query_feedback',
-                'query_row', 'query_col', 'query_value', 'proof_step'):
+                'query_row', 'query_col', 'query_value', 'proof_step', 'selected_cell'):
         st.session_state.pop(key, None)
     clear_kb()
 
 
 def clear_kb():
     """A KB snapshot belongs to one puzzle and one representation."""
-    for key in ('kb_result', 'kb_feedback', 'kb_search', 'kb_page', 'kb_notation'):
+    for key in ('kb_result', 'kb_feedback', 'kb_search', 'kb_page', 'kb_notation', 'kb_types', 'kb_focus', 'kb_explain'):
         st.session_state.pop(key, None)
 
 
-def snapshot_kb(kb, representation, puzzle_number):
+def clear_query():
+    for key in ('query_result', 'query_feedback', 'proof_step'):
+        st.session_state.pop(key, None)
+
+
+def select_cell(r, c, value=None):
+    """One selection drives the board, query coordinates, and KB focus."""
+    st.session_state.selected_cell = (r, c)
+    st.session_state.query_row = r
+    st.session_state.query_col = c
+    if value is not None:
+        st.session_state.query_value = value
+    clear_query()
+    reset_kb_page()
+
+
+def query_coordinates_changed():
+    r, c = st.session_state.query_row, st.session_state.query_col
+    select_cell(r, c)
+
+
+def render_selectable_board(values, givens, n, box_h, box_w):
+    """Native buttons retain keyboard support and update state without navigation."""
+    styles = []
+    with st.container(key='board_grid'):
+        columns = st.columns([0.5] + [1] * n)
+        for c in range(1, n + 1):
+            columns[c].html(f'<div class="grid-index">{c}</div>')
+        for r in range(1, n + 1):
+            columns = st.columns([0.5] + [1] * n)
+            columns[0].html(f'<div class="grid-index">{r}</div>')
+            for c in range(1, n + 1):
+                value = values.get((r, c))
+                key = f'cell_{r}_{c}'
+                rules = []
+                if (r, c) in givens:
+                    rules.append('background:#eef2e9;color:#243d33;')
+                if (r, c) == st.session_state.selected_cell:
+                    rules.append('background:#ffe9ae;box-shadow:inset 0 0 0 2px #b88b24;color:#594409;')
+                if c == 1:
+                    rules.append('border-left:2px solid #416152;')
+                if r == 1:
+                    rules.append('border-top:2px solid #416152;')
+                if c % box_w == 0:
+                    rules.append('border-right:2px solid #416152;')
+                if r % box_h == 0:
+                    rules.append('border-bottom:2px solid #416152;')
+                styles.append(f'.st-key-{key} button {{' + ''.join(rules) + '}')
+                columns[c].button(str(value) if value is not None else '·', key=key,
+                                  help=f'Select row {r}, column {c}' + (f' · value {value}' if value else ' · empty'),
+                                  use_container_width=True, on_click=select_cell, args=(r, c, value))
+    st.html('<style>' + '\n'.join(styles) + '</style>')
+    cell = st.session_state.selected_cell
+    label = f'Selected cell {cell}' if cell else 'No cell selected'
+    st.caption(f'{label} · Click a cell to use it in the question and KB focus.')
+
+
+CONSTRAINT_TYPES = ['Fact', 'At least one value', 'At most one value',
+                    'Row uniqueness', 'Column uniqueness', 'Box uniqueness',
+                    'Last candidate', 'Other']
+
+
+def clause_metadata(clause, n, box_h, box_w):
+    """Classify meaning from expressions, not generator ordering or text substrings.
+
+    A peer pair may share both a row/column and a box. Without provenance from
+    the builder, both tags are honest; stored duplicates remain separate.
+    """
+    symbols = prop_symbols(clause)
+    decoded = {}
+    for symbol in symbols:
+        try:
+            decoded[symbol] = parse_symbol(str(symbol), n)
+        except ValueError:
+            pass
+    cells = sorted({(r, c) for _, r, c, _ in decoded.values()})
+    tags = []
+    explanation = 'A clause from the supplied knowledge base; no specific Sudoku pattern was recognized.'
+    if isinstance(clause, Expr) and not clause.args and clause in decoded:
+        tags = ['Fact']
+        explanation = statement(str(clause), n) + '. This is asserted as a fact in the KB.'
+    elif isinstance(clause, Expr):
+        literals = disjuncts(clause) if clause.op == '|' else ()
+        positive = [decoded.get(item) for item in literals]
+        if (len(literals) == n and all(positive) and len(cells) == 1
+                and all(item[0] == 'Is' for item in positive)
+                and {item[3] for item in positive} == set(range(1, n + 1))):
+            tags = ['At least one value']
+            explanation = f'Cell {tuple(cells[0])} must contain at least one value from 1 to {n}.'
+        pair = None
+        if (len(literals) == 2 and all(isinstance(x, Expr) and x.op == '~' and len(x.args) == 1 for x in literals)):
+            pair = [decoded.get(x.args[0]) for x in literals]
+            if not all(pair) or any(x[0] != 'Is' for x in pair):
+                pair = None
+        if clause.op == '==>' and len(clause.args) == 2:
+            premise, conclusion = clause.args
+            a, b = decoded.get(premise), decoded.get(conclusion)
+            if a and b and a[0] == 'Is' and b[0] == 'Not':
+                pair = [a, b]
+            premises = conjuncts(premise)
+            exclusions = [decoded.get(item) for item in premises]
+            if (b and b[0] == 'Is' and len(premises) == n - 1 and all(exclusions)
+                    and all(x[0] == 'Not' and x[1:3] == b[1:3] for x in exclusions)
+                    and {x[3] for x in exclusions} == set(range(1, n + 1)) - {b[3]}):
+                tags = ['Last candidate']
+                explanation = f'If all other values are ruled out, cell {b[1:3]} must contain {b[3]}.'
+        if pair:
+            (_, r1, c1, v1), (_, r2, c2, v2) = pair
+            if (r1, c1) == (r2, c2) and v1 != v2:
+                tags = ['At most one value']
+                explanation = f'Cell ({r1}, {c1}) cannot contain both {v1} and {v2}.'
+            elif (r1, c1) != (r2, c2) and v1 == v2:
+                if r1 == r2:
+                    tags.append('Row uniqueness')
+                if c1 == c2:
+                    tags.append('Column uniqueness')
+                if (r1 - 1) // box_h == (r2 - 1) // box_h and (c1 - 1) // box_w == (c2 - 1) // box_w:
+                    tags.append('Box uniqueness')
+                if tags:
+                    explanation = f'Cells ({r1}, {c1}) and ({r2}, {c2}) cannot both contain {v1}.'
+    return {'types': tags or ['Other'], 'cells': cells, 'explanation': explanation}
+
+
+def snapshot_kb(kb, representation, puzzle_number, n=9, box_h=3, box_w=3):
     """Copy actual stored clauses and their CNF display; never run inference."""
     required_type = PropDefiniteKB if representation == 'Definite / Horn' else PropKB
     if not isinstance(kb, required_type):
         raise ValueError(f'The builder must return a {required_type.__name__}.')
     clauses, cnf, symbols = [], [], set()
+    metadata, cnf_metadata = [], []
     facts = implications = 0
     for clause in kb.clauses:
         if not isinstance(clause, Expr) and type(clause) is not bool:
             raise ValueError('The knowledge base contains an unsupported clause.')
         clauses.append(str(clause))
+        description = clause_metadata(clause, n, box_h, box_w)
+        metadata.append(description)
         symbols.update(str(symbol) for symbol in prop_symbols(clause))
         if isinstance(clause, Expr):
             facts += int(not clause.args and clause.op[:1].isupper())
             implications += int(clause.op == '==>')
         if representation == 'Definite / Horn' and isinstance(clause, Expr):
-            cnf.extend(str(part) for part in conjuncts(to_cnf(clause)))
+            for part in conjuncts(to_cnf(clause)):
+                cnf.append(str(part))
+                cnf_metadata.append({**description, 'cells': clause_metadata(part, n, box_h, box_w)['cells']})
         else:
             # PropKB.tell already stored each general clause in CNF.
             cnf.append(str(clause))
+            cnf_metadata.append(description)
     return {'representation': representation, 'puzzle_number': puzzle_number,
             'clauses': clauses, 'cnf': cnf, 'symbols': sorted(symbols),
-            'facts': facts, 'implications': implications}
+            'facts': facts, 'implications': implications,
+            'metadata': metadata, 'cnf_metadata': cnf_metadata}
 
 
 def kb_download(snapshot, notation):
@@ -281,6 +421,7 @@ def kb_download(snapshot, notation):
 
 def reset_kb_page():
     st.session_state.pop('kb_page', None)
+    st.session_state.pop('kb_explain', None)
 
 
 def render_kb_inspector(n, box_h, box_w, givens, puzzle_number):
@@ -306,7 +447,7 @@ def render_kb_inspector(n, box_h, box_w, givens, puzzle_number):
                 started = time.perf_counter()
                 kb = builder(n, box_h, box_w, dict(givens))
                 elapsed = time.perf_counter() - started
-                snapshot = snapshot_kb(kb, representation, puzzle_number)
+                snapshot = snapshot_kb(kb, representation, puzzle_number, n, box_h, box_w)
                 snapshot['elapsed'] = elapsed
                 st.session_state.kb_result = snapshot
             except NotImplementedError:
@@ -317,6 +458,10 @@ def render_kb_inspector(n, box_h, box_w, givens, puzzle_number):
     feedback('kb_feedback')
     snapshot = st.session_state.get('kb_result')
     if not snapshot:
+        return
+    if 'metadata' not in snapshot:
+        clear_kb()
+        st.info('Regenerate the knowledge base to enable the new filters.')
         return
     count_col, symbol_col, fact_col = st.columns(3)
     count_col.metric('Stored clauses', len(snapshot['clauses']))
@@ -334,10 +479,21 @@ def render_kb_inspector(n, box_h, box_w, givens, puzzle_number):
         st.caption('These are the actual stored CNF clauses. The original formulas before conversion '
                    'are not retained by PropKB, so they are not reconstructed here.')
     clauses = snapshot['cnf'] if notation == 'CNF' else snapshot['clauses']
+    metadata = snapshot['cnf_metadata'] if notation == 'CNF' else snapshot['metadata']
+    types = st.multiselect('Constraint types', CONSTRAINT_TYPES, key='kb_types',
+                          placeholder='All facts and constraint types', on_change=reset_kb_page)
+    cell = st.session_state.selected_cell
+    focus_label = f'Focus on current selected cell {cell}' if cell else 'Select a cell to enable KB focus'
+    focus = st.checkbox(focus_label, key='kb_focus', disabled=cell is None,
+                        on_change=reset_kb_page)
+    st.caption('Focus shows clauses that explicitly mention this cell. Multiple selected types are combined with OR. '
+               'A clause can belong to both a row/column and a box; duplicates are retained.')
     search = st.text_input('Search clauses', key='kb_search', placeholder='For example: Is1_2_3',
                            on_change=reset_kb_page).strip()
     matches = [(index, clause) for index, clause in enumerate(clauses, 1)
-               if search.casefold() in clause.casefold()]
+               if search.casefold() in clause.casefold()
+               and (not types or set(types).intersection(metadata[index - 1]['types']))
+               and (not focus or cell in metadata[index - 1]['cells'])]
     page_size = 50
     pages = max(1, (len(matches) + page_size - 1) // page_size)
     page = st.number_input('Clause page', min_value=1, max_value=pages, value=1, step=1, key='kb_page')
@@ -345,8 +501,13 @@ def render_kb_inspector(n, box_h, box_w, givens, puzzle_number):
     st.caption(f'{len(matches):,} of {len(clauses):,} clauses match · Page {page} of {pages} · Up to 50 lines per page')
     if visible:
         st.code('\n'.join(f'{index:>5}. {clause}' for index, clause in visible), language='text')
+        with st.expander('Explain a displayed clause'):
+            index = st.selectbox('Clause number', [index for index, _ in visible], key='kb_explain')
+            description = metadata[index - 1]
+            st.write(description['explanation'])
+            st.caption(' · '.join(description['types']))
     else:
-        st.info('No clauses match this search.' if clauses else 'This knowledge base contains no clauses.')
+        st.info('No clauses match these filters. Try another type or turn off cell focus.' if clauses else 'This knowledge base contains no clauses.')
     slug = 'general' if representation == 'General / CNF' else 'definite'
     st.download_button('Download all clauses', kb_download(snapshot, notation),
                        file_name=f'puzzle-{puzzle_number}-{slug}-{notation.lower().replace(" ", "-")}.txt',
@@ -432,9 +593,13 @@ def main():
                                 on_change=clear_results)
         givens = puzzles[selected]['givens']
         solved = st.session_state.get('solution_result')
-        result = st.session_state.get('query_result')
-        target = result['cell'][:2] if result else None
-        st.html(board_html(solved['grid'] if solved else givens, givens, n, box_h, box_w, target))
+        values = solved['grid'] if solved else givens
+        if 'selected_cell' not in st.session_state:
+            first_empty = next(((r, c) for r in range(1, n + 1) for c in range(1, n + 1)
+                                if (r, c) not in givens), (1, 1))
+            st.session_state.selected_cell = None
+            st.session_state.query_row, st.session_state.query_col = first_empty
+        render_selectable_board(values, givens, n, box_h, box_w)
         st.html('<div class="board-legend"><b>Dark numbers</b> · original clues &nbsp; '
                 '<span style="color:#197352">Green numbers</span> · deduced</div>')
         if solved:
@@ -470,15 +635,16 @@ def main():
         st.divider()
         st.subheader('Ask about one cell')
         st.write('Does the puzzle imply that this cell has this value?')
-        first_empty = next(((r, c) for r in range(1, n + 1) for c in range(1, n + 1)
-                            if (r, c) not in givens), (1, 1))
-        with st.form('cell_query'):
-            row_column, col_column, value_column = st.columns(3)
-            r = row_column.number_input('Row', 1, n, first_empty[0], key='query_row')
-            c = col_column.number_input('Column', 1, n, first_empty[1], key='query_col')
-            v = value_column.number_input('Value', 1, n, 1, key='query_value')
-            submitted = st.form_submit_button('Check & explain', use_container_width=True)
+        row_column, col_column, value_column = st.columns(3)
+        r = row_column.number_input('Row', 1, n, key='query_row',
+                                    on_change=query_coordinates_changed)
+        c = col_column.number_input('Column', 1, n, key='query_col',
+                                    on_change=query_coordinates_changed)
+        v = value_column.number_input('Value', 1, n, 1, key='query_value', on_change=clear_query)
+        submitted = st.button('Check & explain', use_container_width=True, key='check_cell')
         if submitted:
+            st.session_state.selected_cell = (r, c)
+            reset_kb_page()
             for key in ('query_result', 'query_feedback', 'proof_step'):
                 st.session_state.pop(key, None)
             with st.spinner('Looking for a supporting proof…'):

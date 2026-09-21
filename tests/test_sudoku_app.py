@@ -48,7 +48,7 @@ def submit_query(app, r=1, c=4, v=4):
     app.number_input(key='query_row').set_value(r)
     app.number_input(key='query_col').set_value(c)
     app.number_input(key='query_value').set_value(v)
-    app.button(key='FormSubmitter:cell_query-Check & explain').click().run()
+    app.button(key='check_cell').click().run()
     assert not app.exception
     return app
 
@@ -380,3 +380,143 @@ def test_kb_snapshot_and_conversion_do_not_mutate_builder_result():
     snapshot['clauses'].clear()
     snapshot['cnf'].clear()
     assert kb.clauses == original
+
+
+def test_board_selection_updates_query_and_clears_previous_answer(fixture_ui, monkeypatch):
+    set_trace(monkeypatch, fixture_trace)
+    app = submit_query(fixture_ui)
+    assert 'query_result' in app.session_state
+    app.button(key='cell_1_2').click().run()
+    assert not app.exception
+    assert app.session_state.selected_cell == (1, 2)
+    assert app.number_input(key='query_row').value == 1
+    assert app.number_input(key='query_col').value == 2
+    assert app.number_input(key='query_value').value == 2
+    assert 'query_result' not in app.session_state
+    assert not app.slider
+    app.button(key='cell_3_4').click().run()
+    assert app.session_state.selected_cell == (3, 4)
+    assert app.number_input(key='query_row').value == 3
+    assert app.number_input(key='query_col').value == 4
+    assert app.number_input(key='query_value').value == 2  # Empty cells preserve the proposed value.
+
+
+def test_type_focus_and_search_combine_without_rebuilding_kb(fixture_ui, monkeypatch):
+    calls = []
+    def build(n, h, w, givens):
+        calls.append(1)
+        return ui.sudoku_solver.build_general_kb(n, h, w, givens)
+    monkeypatch.setattr(ui, 'build_general_kb', build)
+    app = fixture_ui
+    app.button(key='build_kb').click().run()
+    original = deepcopy(app.session_state.kb_result)
+    app.number_input(key='kb_page').set_value(2).run()
+    app.button(key='cell_2_2').click().run()
+    assert app.number_input(key='kb_page').value == 1
+    app.checkbox(key='kb_focus').check().run()
+    app.multiselect(key='kb_types').set_value(['At least one value']).run()
+    assert len(app.code[0].value.splitlines()) == 1
+    assert 'Is2_2_1 | Is2_2_2 | Is2_2_3 | Is2_2_4' in app.code[0].value
+    assert 'cell (2, 2)' in app.checkbox(key='kb_focus').label
+    assert any('must contain at least one value' in item.value for item in app.markdown)
+    app.button(key='cell_3_4').click().run()
+    assert app.checkbox(key='kb_focus').value is True
+    assert 'Is3_4_1 | Is3_4_2' in app.code[0].value
+    # Coordinate inputs also drive the board and filter immediately, without inference.
+    app.number_input(key='query_row').set_value(2).run()
+    app.number_input(key='query_col').set_value(3).run()
+    assert app.session_state.selected_cell == (2, 3)
+    assert 'Is2_3_1 | Is2_3_2' in app.code[0].value
+    app.text_input(key='kb_search').set_value('Is1_1_1').run()
+    assert not app.code
+    assert any('No clauses match' in item.value for item in app.info)
+    assert calls == [1]
+    assert app.session_state.kb_result == original
+    assert 'Is1_1_1' in ui.kb_download(original, 'CNF')
+    assert not app.exception
+
+
+def test_fact_filter_and_cell_focus(fixture_ui, monkeypatch):
+    monkeypatch.setattr(ui, 'build_general_kb', ui.sudoku_solver.build_general_kb)
+    app = fixture_ui
+    app.button(key='build_kb').click().run()
+    app.multiselect(key='kb_types').set_value(['Fact']).run()
+    assert len(app.code[0].value.splitlines()) == 3
+    assert app.checkbox(key='kb_focus').disabled
+    app.button(key='cell_1_4').click().run()
+    app.checkbox(key='kb_focus').check().run()
+    assert not app.code  # No fact is asserted for the empty cell.
+    app.button(key='cell_1_2').click().run()
+    assert len(app.code[0].value.splitlines()) == 1
+    assert app.code[0].value.strip().endswith('Is1_2_2')
+    app.multiselect(key='kb_types').set_value(['Fact', 'At least one value']).run()
+    assert len(app.code[0].value.splitlines()) == 2
+    app.button(key='reset').click().run()
+    assert app.session_state.selected_cell is None
+    assert 'kb_result' not in app.session_state
+    assert 'kb_types' not in app.session_state
+    assert not app.exception
+
+
+@pytest.mark.parametrize('expression,expected', [
+    ('Is1_1_1', ['Fact']),
+    ('Is1_1_1 | Is1_1_2 | Is1_1_3 | Is1_1_4', ['At least one value']),
+    ('~Is1_1_1 | ~Is1_1_2', ['At most one value']),
+    ('~Is1_1_1 | ~Is1_4_1', ['Row uniqueness']),
+    ('~Is1_1_1 | ~Is4_1_1', ['Column uniqueness']),
+    ('~Is1_1_1 | ~Is2_2_1', ['Box uniqueness']),
+    ('~Is1_1_1 | ~Is1_2_1', ['Row uniqueness', 'Box uniqueness']),
+    ('~Is1_1_1 | ~Is2_1_1', ['Column uniqueness', 'Box uniqueness']),
+    ('Is1_1_1 ==> Not1_2_1', ['Row uniqueness', 'Box uniqueness']),
+    ('(Not1_1_1 & Not1_1_2 & Not1_1_3) ==> Is1_1_4', ['Last candidate']),
+    ('Is1_1_1 | Is1_2_1', ['Other']),
+])
+def test_clause_types_are_classified_by_meaning(expression, expected):
+    from utils import expr
+    assert ui.clause_metadata(expr(expression), 4, 2, 2)['types'] == expected
+
+
+def test_rectangular_box_classification_and_exact_cell_coordinates():
+    from utils import expr
+    assert ui.clause_metadata(expr('~Is5_4_1 | ~Is6_6_1'), 6, 2, 3)['types'] == ['Box uniqueness']
+    assert ui.clause_metadata(expr('~Is2_3_1 | ~Is3_4_1'), 6, 2, 3)['types'] == ['Other']
+    assert ui.clause_metadata(expr('~Is1_1_1 | ~Is1_10_1'), 16, 4, 4)['cells'] == [(1, 1), (1, 10)]
+
+
+def test_horn_cnf_filters_keep_rule_meaning(fixture_ui, monkeypatch):
+    monkeypatch.setattr(ui, 'build_definite_kb', definite_fixture_kb)
+    app = fixture_ui
+    app.radio(key='kb_representation').set_value('Definite / Horn').run()
+    app.button(key='build_kb').click().run()
+    app.multiselect(key='kb_types').set_value(['Row uniqueness']).run()
+    app.button(key='cell_1_4').click().run()
+    app.checkbox(key='kb_focus').check().run()
+    assert len(app.code[0].value.splitlines()) == 1
+    assert '==>' in app.code[0].value
+    app.radio(key='kb_notation').set_value('CNF').run()
+    assert len(app.code[0].value.splitlines()) == 1
+    assert '~Is1_1_1' in app.code[0].value
+    assert 'Not1_4_1' in app.code[0].value
+    assert not app.exception
+
+
+@pytest.mark.parametrize('action', ['reset', 'change_puzzle'])
+def test_reset_clears_selection_without_selecting_another_cell(fixture_ui, monkeypatch, action):
+    monkeypatch.setattr(ui, 'build_general_kb', ui.sudoku_solver.build_general_kb)
+    app = fixture_ui
+    app.button(key='cell_3_3').click().run()
+    assert app.session_state.selected_cell == (3, 3)
+    if action == 'reset':
+        app.button(key='reset').click().run()
+    else:
+        app.selectbox(key='puzzle_index').set_value(1).run()
+    assert app.session_state.selected_cell is None
+    assert any('No cell selected' in item.value for item in app.caption)
+    app.button(key='build_kb').click().run()
+    assert app.checkbox(key='kb_focus').disabled
+    assert not app.checkbox(key='kb_focus').value
+    app.button(key='cell_2_2').click().run()
+    assert not app.checkbox(key='kb_focus').disabled
+    assert app.number_input(key='query_row').value == 2
+    assert app.number_input(key='query_col').value == 2
+    assert not app.exception
