@@ -2,7 +2,7 @@
 
 Live app: [Group 23 - Sudoku Solver](https://it5005-group23-sudoku.streamlit.app)
 
-A shared starting point for four group members. **The assignment is not implemented yet.** The original solver stubs, Streamlit TODOs, and conceptual-answer placeholders are intentionally preserved.
+A shared project for Group 23. The Streamlit frontend supports puzzle selection, full-grid solver controls, targeted queries, and a proof viewer. The backend solver functions are still starter stubs; the conceptual answers remain to be completed.
 
 ## Run locally
 
@@ -16,7 +16,9 @@ pip install -r requirements.txt
 streamlit run sudoku_app.py
 ```
 
-The starter currently displays only **Group 23 - Sudoku Solver**. This is expected: solving, puzzle selection, queries, and tutor mode are group implementation tasks. Calling an unimplemented solver function raises `NotImplementedError`.
+The app loads all five puzzles and shows their original clues. Solve and query actions display a clear unavailable message while the corresponding backend function raises `NotImplementedError`. They connect to the real solver as its implementation arrives; reference solutions are never used as a fallback.
+
+The optional `pl_bc_entails_with_trace` helper enables the tutor view. If only plain backward chaining is ready, the app can display its verdict without a trace. A failed query is described as unproved unless a separate `Not` query establishes that the value is ruled out. See [the solver/UI contract](docs/solver-ui-contract.md) for the agreed formats.
 
 For the notebook:
 
@@ -24,6 +26,18 @@ For the notebook:
 pip install -r requirements-dev.txt
 jupyter lab Sudoku_Assignment.ipynb
 ```
+
+## Frontend verification
+
+After installing `requirements-dev.txt`, run:
+
+```sh
+python -m pytest -q
+```
+
+Tests use Streamlit's `AppTest` with explicit backend fixtures to exercise solved grids, failed and excluded queries, proof navigation, puzzle resets, and unavailable or malformed backend responses. Fixtures stay under `tests/`; the production app does not import them or read reference solutions for inference. End-to-end integration with real deductions still needs the backend implementation.
+
+The app resolves `puzzles.json` relative to its own file, so it also runs when launched from another working directory. For the repository's theme settings, launch from the repository root as shown above.
 
 ## Deploy on Streamlit Community Cloud
 
