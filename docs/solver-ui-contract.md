@@ -1,14 +1,16 @@
 # Group 23: solver-to-UI interface contract
 
-**Status:** Draft for Member 2 and Member 3 to review before implementation. This document defines the proposed integration contract; it does not claim that any solver or trace function has been implemented.
+**Status:** Core interface reviewed and accepted before implementation. The optional full-grid walkthrough helpers were added as a later proposal; see [the separate extension](full-grid-trace-extension.md). Their implementation in the local integration backend does not imply Member 2 has accepted that extension.
 
 **Scope:** Member 2 implements the definite knowledge base, inference, full-grid solvers, and trace production in `sudoku_solver.py`. Member 3 implements the Streamlit interface and renders the returned data. The general knowledge base belongs to Member 1 and keeps its existing interface.
 
 The starter function signatures and assignment restrictions remain authoritative. The additional trace helper and the detailed error/mutation behavior below are group integration decisions, not extra requirements quoted from the assignment.
 
-## 1. What already exists and what needs implementing
+## 1. Initial handoff baseline
 
-| Component | Current state | Integration responsibility |
+This table records the state when the contract was proposed, not current implementation progress. The frontend and general KB have since been implemented; the local Member 2 integration backend is described in section 13.
+
+| Component | State at initial handoff | Integration responsibility |
 | --- | --- | --- |
 | `puzzles.json` | Provided; five 9×9 puzzles with 3×3 boxes | UI selects a puzzle and converts its givens to Python keys |
 | Notebook `load_pool` | Provided | Keep the assignment's loader unchanged |
@@ -520,3 +522,35 @@ Member 3 can build the UI now using the real puzzle inputs and separate test fix
 - [ ] Member 3 verifies the UI against both live results and expected error behavior.
 
 The solver implementation can choose its indexes, search order, memoization, and private metadata. Those choices stay internal as long as the interfaces, logical meaning, and behavior above hold.
+
+
+## 13. Local integration implementation and later additions
+
+The local backend written for frontend integration testing follows the core interfaces above. That backend and its tests are currently uncommitted and are not included in this branch's published code. It remains separate from Member 2's reviewed handoff; this section records implementation choices, not additional obligations for Member 2.
+
+### Additional public APIs
+
+Only these two public helpers extend this agreement:
+
+```python
+solve_full_grid_fc_with_trace(n, box_h, box_w, givens)
+solve_full_grid_bc_with_trace(n, box_h, box_w, givens)
+# Each returns {'grid': complete_tuple_keyed_grid, 'steps': ordered_steps}.
+```
+
+They support **Follow the solve** and are specified in [the optional full-grid extension](full-grid-trace-extension.md). The frontend falls back to the existing grid-only solver if the matching helper is absent or raises `NotImplementedError`. The single-cell `pl_bc_entails_with_trace` helper was already part of the accepted core agreement in section 7.
+
+Single-cell traces contain only the supporting proof and end with the query. Full-grid traces contain the selected algorithm's successful deductions for the whole run and have no single final-query requirement. Both use the same step fields and reason labels. Neither is a search-event log. Incomplete full-grid calls still raise `ValueError`; they do not return partial grids or partial walkthroughs. No uniqueness checking or solution enumeration has been added.
+
+### Private implementation choices
+
+- A compatible `PropDefiniteKB` subclass stores rule labels, premise indexes, and proof metadata. The frontend does not access those private fields.
+- FC calls the unchanged supplied `pl_fc_entails` once with an absent probe atom to exhaust its agenda. The KB's premise lookup observes processed atoms and records provenance; it does not insert deductions into `kb.clauses`.
+- BC expands dependencies backward from each goal, then propagates proven premises through suspended rules until that dependency set reaches a fixed point. This tabled implementation handles cycles and shares proven subgoals across queries; it is not a simple recursive DFS. Clause changes invalidate the cache. A query in a connected Sudoku KB can reach most of its rules.
+- Full-grid BC queries every cell/value, so it does not hide conflicting conclusions by accepting the first successful value.
+
+Member 2 can use different private indexes or proof-search strategies while preserving the public behavior. Notebook performance comparisons should explain that this FC implementation exhausts its agenda once, while BC reuses proof tables within a full-grid solve. UI timings include KB construction and, when the optional helper is used, trace recording; they are not inference-only benchmarks.
+
+### Verification scope
+
+The local `tests/test_definite_solver.py` checks both solvers against all five supplied solutions, positive and negative BC candidates, proof validity, generic Horn cycles, cache invalidation, fresh return objects, input preservation, invalid/incomplete inputs, rectangular boxes, and real frontend integration. It also checks the optional full-grid traces separately. Passing these checks is integration evidence, not a substitute for Member 2's review or the notebook's assignment answers. The checklist above remains available for the final handoff review.
