@@ -2,7 +2,7 @@
 
 Live app: [Group 23 - Sudoku Solver](https://it5005-group23-sudoku.streamlit.app)
 
-A shared project for Group 23. The Streamlit frontend supports puzzle selection, full-grid solver controls, targeted queries, a proof viewer, and a knowledge-base inspector. The backend solver functions are still starter stubs; the conceptual answers remain to be completed.
+A shared project for Group 23. The Streamlit frontend supports puzzle selection, full-grid solver controls, targeted queries, a proof viewer, and a knowledge-base inspector. The general knowledge-base builder is implemented; the definite-KB and FC/BC solver functions are still starter stubs. The conceptual answers remain to be completed.
 
 ## Run locally
 
@@ -19,6 +19,8 @@ streamlit run sudoku_app.py
 The app loads all five puzzles and shows their original clues. Solve and query actions display a clear unavailable message while the corresponding backend function raises `NotImplementedError`. They connect to the real solver as its implementation arrives; reference solutions are never used as a fallback.
 
 The optional `pl_bc_entails_with_trace` helper enables the tutor view. If only plain backward chaining is ready, the app can display its verdict without a trace. A failed query is described as unproved unless a separate `Not` query establishes that the value is ruled out. See [the solver/UI contract](docs/solver-ui-contract.md) for the agreed formats.
+
+The general builder was adapted from `Serim_sudoku.zip`, with corrected box traversal for rectangular grids. The supplied `logic_.py` and `utils.py` are unchanged. The archive's definite-KB/FC/BC implementation and notebook answers/outputs were not imported; those remain separate work, and its experiment outputs used different support libraries.
 
 ### Inspect the knowledge base
 
@@ -41,7 +43,9 @@ After installing `requirements-dev.txt`, run:
 python -m pytest -q
 ```
 
-Tests use Streamlit's `AppTest` with explicit backend fixtures to exercise solved grids, failed and excluded queries, proof navigation, puzzle resets, and unavailable or malformed backend responses. Fixtures stay under `tests/`; the production app does not import them or read reference solutions for inference. End-to-end integration with real deductions still needs the backend implementation.
+General-KB tests check the supplied solutions against all generated clauses, rectangular boxes, inference on a small grid, input preservation, and the app's real CNF generation.
+
+Frontend tests use Streamlit's `AppTest` with explicit backend fixtures to exercise solved grids, failed and excluded queries, proof navigation, puzzle resets, and unavailable or malformed backend responses. Fixtures stay under `tests/`; the production app does not import them or read reference solutions for inference. End-to-end integration with real deductions still needs the backend implementation.
 
 The app resolves `puzzles.json` relative to its own file, so it also runs when launched from another working directory. For the repository's theme settings, launch from the repository root as shown above.
 
