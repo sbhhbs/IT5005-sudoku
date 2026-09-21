@@ -41,6 +41,8 @@ def fixture_ui(monkeypatch):
     monkeypatch.setattr(ui, 'solve_full_grid_bc', lambda *args: dict(GRID))
     monkeypatch.setattr(ui, 'pl_bc_entails', lambda kb, query: False)
     monkeypatch.delattr(ui.sudoku_solver, 'pl_bc_entails_with_trace', raising=False)
+    monkeypatch.delattr(ui.sudoku_solver, 'solve_full_grid_fc_with_trace', raising=False)
+    monkeypatch.delattr(ui.sudoku_solver, 'solve_full_grid_bc_with_trace', raising=False)
     return AppTest.from_function(entrypoint).run()
 
 
@@ -87,6 +89,7 @@ def test_unavailable_backend_has_honest_solve_message(method, monkeypatch):
         raise NotImplementedError
     function = 'solve_full_grid_fc' if method == 'Forward chaining' else 'solve_full_grid_bc'
     monkeypatch.setattr(ui.sudoku_solver, function, unavailable)
+    monkeypatch.setattr(ui.sudoku_solver, function + '_with_trace', unavailable, raising=False)
     app = AppTest.from_file(str(ROOT / 'sudoku_app.py')).run()
     app.radio(key='algorithm').set_value(method)
     app.button(key='solve').click().run()
@@ -162,10 +165,27 @@ def test_true_trace_and_slider_render_live_proof(fixture_ui, monkeypatch):
     app = submit_query(fixture_ui)
     assert any('True — row 1, column 4 must be 4' in item.value for item in app.success)
     assert app.slider(key='proof_step').max == 7
+    assert app.button(key='proof_previous').disabled
+    assert not app.button(key='proof_next').disabled
+    app.button(key='proof_next').click().run()
+    assert app.slider(key='proof_step').value == 2
+    assert any('STEP 2 OF 7' in item.value for item in app.caption)
+    app.button(key='proof_previous').click().run()
+    assert app.slider(key='proof_step').value == 1
+    assert app.button(key='proof_previous').disabled
     app.slider(key='proof_step').set_value(7).run()
     assert not app.exception
+    assert app.button(key='proof_next').disabled
+    app.button(key='proof_previous').click().run()
+    assert app.slider(key='proof_step').value == 6
+    app.button(key='proof_next').click().run()
     assert any('only remaining candidate' in item.value for item in app.markdown)
     assert any('proof' in item.value.lower() for item in app.subheader)
+    submit_query(app, r=1, c=1, v=1)
+    assert not app.slider
+    assert app.button(key='proof_previous').disabled
+    assert app.button(key='proof_next').disabled
+    assert not app.exception
 
 
 def test_false_with_separate_exclusion_proof(fixture_ui, monkeypatch):
@@ -520,3 +540,61 @@ def test_reset_clears_selection_without_selecting_another_cell(fixture_ui, monke
     assert app.number_input(key='query_row').value == 2
     assert app.number_input(key='query_col').value == 2
     assert not app.exception
+
+
+@pytest.mark.parametrize('method,name', [('Forward chaining', 'solve_full_grid_fc_with_trace'),
+                                       ('Backward chaining', 'solve_full_grid_bc_with_trace')])
+def test_solve_walkthrough_with_explicit_backend_fixture(fixture_ui, monkeypatch, method, name):
+    # This controlled UI fixture asserts additional rules for the remaining
+    # placements. It is not an inference result for the three-clue puzzle.
+    steps = deepcopy(STEPS)
+    established = {step['conclusion'] for step in steps}
+    for (r, c), value in GRID.items():
+        conclusion = str(ui.atom('Is', r, c, value))
+        if conclusion not in established:
+            steps.append({'conclusion': conclusion, 'premises': ['Is1_4_4'], 'reason': 'rule_application'})
+    calls = []
+    def traced(n, h, w, givens):
+        calls.append(dict(givens))
+        return {'grid': dict(GRID), 'steps': deepcopy(steps)}
+    monkeypatch.setattr(ui.sudoku_solver, name, traced, raising=False)
+    app = fixture_ui
+    app.radio(key='algorithm').set_value(method)
+    app.button(key='solve').click().run()
+    assert not app.exception
+    assert calls == [GIVENS]
+    assert app.slider(key='solve_walk_step').value == 0
+    assert app.slider(key='solve_walk_step').max == 13
+    assert app.button(key='solve_walk_previous').disabled
+    app.button(key='solve_walk_next').click().run()
+    assert app.slider(key='solve_walk_step').value == 1
+    assert any('4 / 16 cells filled' in item.value for item in app.caption)
+    app.slider(key='solve_walk_step').set_value(13).run()
+    assert app.button(key='solve_walk_next').disabled
+    assert any('16 / 16 cells filled' in item.value for item in app.caption)
+    app.radio(key='solve_walk_mode').set_value('All deductions').run()
+    assert app.slider(key='solve_walk_step').value == 0
+    assert app.slider(key='solve_walk_step').max == len(steps)
+    app.button(key='solve_walk_next').click().run()
+    set_trace(monkeypatch, fixture_trace)
+    submit_query(app)
+    assert app.slider(key='solve_walk_step').value == 1
+    app.button(key='proof_next').click().run()
+    assert app.slider(key='proof_step').value == 2
+    app.button(key='solve_walk_previous').click().run()
+    assert app.slider(key='proof_step').value == 2
+    app.button(key='reset').click().run()
+    assert not app.slider
+    assert 'solution_result' not in app.session_state
+    assert not app.exception
+
+
+@pytest.mark.parametrize('steps', [[],
+    [{'conclusion': 'Not1_1_1', 'premises': [], 'reason': 'rule_application'}],
+    [{'conclusion': 'Is1_1_1', 'premises': ['Not1_1_1'], 'reason': 'last_candidate'}],
+])
+def test_frontend_rejects_invalid_solve_trace_without_backend_dependency(monkeypatch, steps):
+    monkeypatch.setattr(ui.sudoku_solver, 'solve_full_grid_fc_with_trace',
+                        lambda *args: {'grid': {(1, 1): 1}, 'steps': steps}, raising=False)
+    with pytest.raises(ValueError):
+        ui.solve_with_optional_trace('Forward chaining', 1, 1, 1, {})

@@ -173,6 +173,39 @@ def check_cell(n, box_h, box_w, givens, r, c, v):
             'trace_available': trace_available, 'elapsed': time.perf_counter() - started}
 
 
+def solve_with_optional_trace(algorithm, n, box_h, box_w, givens):
+    """Prefer a trace from this same solve; retain the agreed grid-only fallback."""
+    name = 'solve_full_grid_fc' if algorithm == 'Forward chaining' else 'solve_full_grid_bc'
+    traced = getattr(sudoku_solver, name + '_with_trace', None)
+    if callable(traced):
+        try:
+            result = traced(n, box_h, box_w, dict(givens))
+        except NotImplementedError:
+            pass
+        else:
+            if not isinstance(result, dict) or not isinstance(result.get('steps'), list) or not result['steps']:
+                raise ValueError('The solver returned an invalid full-grid trace.')
+            grid = validate_grid(result.get('grid'), givens, n, box_h, box_w)
+            last = result['steps'][-1]
+            if not isinstance(last, dict):
+                raise ValueError('The solver returned an invalid full-grid trace step.')
+            prefix, r, c, v = parse_symbol(last.get('conclusion'), n)
+            proof = validate_trace({'query': str(atom(prefix, r, c, v)), 'entailed': True,
+                                    'steps': result['steps']}, atom(prefix, r, c, v), n, givens)
+            placed = {}
+            for step in proof['steps']:
+                prefix, r, c, v = parse_symbol(step['conclusion'], n)
+                if (prefix == 'Is') != (grid[r, c] == v):
+                    raise ValueError('The solve trace contradicts the returned grid.')
+                if prefix == 'Is':
+                    placed[r, c] = v
+            if placed != grid:
+                raise ValueError('The solve trace does not establish every returned cell.')
+            return grid, proof['steps']
+    solver = solve_full_grid_fc if algorithm == 'Forward chaining' else solve_full_grid_bc
+    return validate_grid(solver(n, box_h, box_w, dict(givens)), givens, n, box_h, box_w), None
+
+
 def statement(name, n):
     prefix, r, c, v = parse_symbol(name, n)
     return f'Row {r}, column {c} {"cannot be" if prefix == "Not" else "is"} {v}'
@@ -244,7 +277,8 @@ def board_html(values, givens, n, box_h, box_w, target=None, support=(), label='
 def clear_results():
     """Clear puzzle-dependent state before widgets are reconstructed."""
     for key in ('solution_result', 'query_result', 'solve_feedback', 'query_feedback',
-                'query_row', 'query_col', 'query_value', 'proof_step', 'selected_cell'):
+                'query_row', 'query_col', 'query_value', 'proof_step', 'selected_cell',
+                'solve_walk_step', 'solve_walk_mode'):
         st.session_state.pop(key, None)
     clear_kb()
 
@@ -541,6 +575,92 @@ def render_query_result(result):
         st.info('The cell verdict is available. Step-by-step explanations are not available yet.')
 
 
+def move_proof_step(offset, total):
+    """Update the slider before rerendering, staying inside the current proof."""
+    st.session_state.proof_step = max(1, min(total, st.session_state.get('proof_step', 1) + offset))
+
+
+def reset_solve_walk():
+    st.session_state.pop('solve_walk_step', None)
+
+
+def move_solve_step(offset, total):
+    st.session_state.solve_walk_step = max(0, min(total, st.session_state.get('solve_walk_step', 0) + offset))
+
+
+def solve_checkpoints(steps, givens, n, mode):
+    """Choose display checkpoints without changing the underlying trace order."""
+    if mode == 'All deductions':
+        return list(range(len(steps)))
+    checkpoints = []
+    for index, step in enumerate(steps):
+        prefix, r, c, _ = parse_symbol(step['conclusion'], n)
+        if prefix == 'Is' and (r, c) not in givens:
+            checkpoints.append(index)
+    return checkpoints
+
+
+def replay_solve(steps, through, givens, n):
+    """Replay established placements only; the returned solution is not a source."""
+    values = dict(givens)
+    for step in steps[:through + 1]:
+        prefix, r, c, v = parse_symbol(step['conclusion'], n)
+        if prefix == 'Is':
+            values[r, c] = v
+    return values
+
+
+def render_solve_walkthrough(result, givens, n, box_h, box_w):
+    st.divider()
+    st.subheader('Follow the solve')
+    steps = result.get('steps')
+    if steps is None:
+        st.info('This solver returned a grid without a walkthrough. Full-grid trace support is optional.')
+        return
+    st.caption(f'{result["algorithm"]} · Replay the successful deductions recorded during this solve. '
+               'This does not show attempted goals or failed search branches.')
+    mode = st.radio('Walkthrough detail', ['Cell placements', 'All deductions'], horizontal=True,
+                    key='solve_walk_mode', on_change=reset_solve_walk)
+    st.caption('Cell placements groups the intervening eliminations before each new value. '
+               'All deductions includes clue-processing steps and individual eliminations. Both start from the original clues.')
+    checkpoints = solve_checkpoints(steps, givens, n, mode)
+    total = len(checkpoints)
+    current = st.session_state.get('solve_walk_step', 0)
+    previous, slider, following = st.columns([1, 3, 1], vertical_alignment='center')
+    previous.button('Previous step', key='solve_walk_previous', use_container_width=True,
+                    disabled=current == 0, on_click=move_solve_step, args=(-1, total))
+    with slider:
+        position = st.slider('Solve step', 0, total, key='solve_walk_step') if total else 0
+        if not total:
+            st.caption('The original clues already fill the board.')
+    following.button('Next step', key='solve_walk_next', use_container_width=True,
+                     disabled=position == total, on_click=move_solve_step, args=(1, total))
+    through = checkpoints[position - 1] if position else -1
+    values = replay_solve(steps, through, givens, n)
+    step = steps[through] if position else None
+    target = parse_symbol(step['conclusion'], n)[1:3] if step else None
+    support = {parse_symbol(p, n)[1:3] for p in step['premises']} if step else set()
+    board, description = st.columns([1.1, 1], gap='large')
+    with board:
+        st.html(board_html(values, givens, n, box_h, box_w, target, support, 'Solve progress'))
+        st.caption(f'{len(values)} / {n*n} cells filled · Gold: current cell · Green tint: supporting cells')
+    with description:
+        st.caption(f'SOLVE STEP {position} OF {total}')
+        if step:
+            st.markdown(f'**{REASON_TITLES.get(step["reason"], "Apply a logical rule")}**')
+            st.write(explain_step(step, n))
+            st.caption(f'Recorded deduction {through + 1} of {len(steps)}')
+            if step['premises']:
+                with st.expander('Supporting facts', expanded=True):
+                    for premise in step['premises']:
+                        st.write('• ' + statement(premise, n) + '.')
+        else:
+            st.markdown('**Start from the original clues**')
+            st.write('Use Next step to see how the solver fills the remaining cells.')
+    st.download_button('Download solve trace', json.dumps({'algorithm': result['algorithm'], 'steps': steps}, indent=2),
+                       file_name='sudoku-solve-trace.json', mime='application/json', key='download_solve_trace')
+
+
 def render_tutor(result, givens, n, box_h, box_w):
     proof = result['positive'] if result['positive']['entailed'] else result['exclusion']
     if not proof or not proof['steps']:
@@ -551,7 +671,16 @@ def render_tutor(result, givens, n, box_h, box_w):
     st.write('Explore the facts and deductions supporting the answer. Each step builds on earlier steps.')
     if not result['positive']['entailed']:
         st.caption('This is a separate proof that the requested value is ruled out.')
-    step_number = st.slider('Proof step', 1, len(steps), key='proof_step') if len(steps) > 1 else 1
+    current_step = st.session_state.get('proof_step', 1)
+    previous_column, slider_column, next_column = st.columns([1, 3, 1], vertical_alignment='center')
+    previous_column.button('Previous step', key='proof_previous', use_container_width=True,
+                           disabled=current_step <= 1, on_click=move_proof_step, args=(-1, len(steps)))
+    with slider_column:
+        step_number = st.slider('Proof step', 1, len(steps), key='proof_step') if len(steps) > 1 else 1
+        if len(steps) == 1:
+            st.caption('Step 1 of 1')
+    next_column.button('Next step', key='proof_next', use_container_width=True,
+                       disabled=step_number >= len(steps), on_click=move_proof_step, args=(1, len(steps)))
     step = steps[step_number - 1]
     _, r, c, v = parse_symbol(step['conclusion'], n)
     support = {parse_symbol(p, n)[1:3] for p in step['premises']}
@@ -579,6 +708,11 @@ def render_tutor(result, givens, n, box_h, box_w):
 
 def main():
     st.set_page_config(page_title='Group 23 - Sudoku Solver', page_icon='🧩', layout='wide')
+    # Query submission reruns before reaching the walkthrough widgets. Keep
+    # their state owned by the session so that widget cleanup cannot erase it.
+    for key in ('solve_walk_step', 'solve_walk_mode'):
+        if key in st.session_state:
+            st.session_state[key] = st.session_state[key]
     st.html(STYLE)
     n, box_h, box_w, puzzles = load_puzzles()
     st.html('<div class="eyebrow">IT5005 / KNOWLEDGE REPRESENTATION & INFERENCE</div>')
@@ -618,20 +752,23 @@ def main():
         if solve_pressed:
             st.session_state.pop('solution_result', None)
             st.session_state.pop('solve_feedback', None)
-            solver = solve_full_grid_fc if algorithm == 'Forward chaining' else solve_full_grid_bc
+            reset_solve_walk()
             with st.spinner('Following the Sudoku rules…'):
                 try:
                     started = time.perf_counter()
-                    grid = solver(n, box_h, box_w, dict(givens))
+                    grid, steps = solve_with_optional_trace(algorithm, n, box_h, box_w, givens)
                     elapsed = time.perf_counter() - started
-                    grid = validate_grid(grid, givens, n, box_h, box_w)
-                    st.session_state.solution_result = {'grid': grid, 'algorithm': algorithm, 'elapsed': elapsed}
+                    st.session_state.solution_result = {'grid': grid, 'algorithm': algorithm, 'elapsed': elapsed, 'steps': steps}
                 except NotImplementedError:
                     st.session_state.solve_feedback = {'kind': 'info', 'text': f'{algorithm} is not available yet. You can still explore the puzzles.'}
                 except ValueError as error:
                     st.session_state.solve_feedback = {'kind': 'warning', 'text': str(error)}
             st.rerun()
         feedback('solve_feedback')
+        with st.expander('What if a puzzle has multiple solutions?'):
+            st.write('These rules infer only forced values; they do not guess or choose between solutions. '
+                     'An ambiguous puzzle remains incomplete. An incomplete result may also mean the rules '
+                     'need stronger reasoning, so it does not establish how many solutions exist.')
         st.divider()
         st.subheader('Ask about one cell')
         st.write('Does the puzzle imply that this cell has this value?')
@@ -661,6 +798,8 @@ def main():
         else:
             st.caption('Check a cell to see its verdict and, when available, a step-by-step explanation.')
 
+    if st.session_state.get('solution_result'):
+        render_solve_walkthrough(st.session_state.solution_result, givens, n, box_h, box_w)
     if st.session_state.get('query_result'):
         render_tutor(st.session_state.query_result, givens, n, box_h, box_w)
     render_kb_inspector(n, box_h, box_w, givens, selected + 1)

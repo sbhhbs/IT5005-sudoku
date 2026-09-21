@@ -18,7 +18,11 @@ streamlit run sudoku_app.py
 
 The app loads all five puzzles and shows their original clues. Click any board cell to highlight it and set the row/column in **Ask about one cell**; clicking a filled cell also copies its value. Editing the query coordinates updates the same selection. Selecting a different cell clears the previous query result without running inference. **Reset** or changing puzzles clears the selection and highlight; KB cell focus stays disabled until a cell is selected again. Solve and query actions display a clear unavailable message while the corresponding backend function raises `NotImplementedError`. They connect to the real solver as its implementation arrives; reference solutions are never used as a fallback.
 
-The optional `pl_bc_entails_with_trace` helper enables the tutor view. If only plain backward chaining is ready, the app can display its verdict without a trace. A failed query is described as unproved unless a separate `Not` query establishes that the value is ruled out. See [the solver/UI contract](docs/solver-ui-contract.md) for the agreed formats.
+After **Solve puzzle**, **Follow the solve** replays the selected algorithm's actual successful deductions. Start at the original clues, use Previous/Next or the slider, and switch between **Cell placements** and **All deductions**. The replay board is reconstructed from the trace prefix, not copied from the final solution. Full-grid traces use [optional extension helpers](docs/full-grid-trace-extension.md), preserving the original grid-only APIs. Without those helpers, solving still works and the app reports that no walkthrough is available.
+
+These solvers never choose arbitrarily between multiple solutions. They report an incomplete grid if the Horn rules cannot finish; that alone does not distinguish ambiguity from a unique puzzle needing stronger rules.
+
+The optional `pl_bc_entails_with_trace` helper enables the single-cell tutor view. If only plain backward chaining is ready, the app can display its verdict without a trace. A failed query is described as unproved unless a separate `Not` query establishes that the value is ruled out. See [the solver/UI contract](docs/solver-ui-contract.md) for the agreed formats.
 
 The general builder was adapted from `Serim_sudoku.zip`, with corrected box traversal for rectangular grids. The supplied `logic_.py` and `utils.py` are unchanged. The archive's definite-KB/FC/BC implementation and notebook answers/outputs were not imported; those remain separate work, and its experiment outputs used different support libraries.
 
@@ -45,7 +49,7 @@ python -m pytest -q
 
 General-KB tests check the supplied solutions against all generated clauses, rectangular boxes, inference on a small grid, input preservation, and the app's real CNF generation.
 
-Frontend tests use Streamlit's `AppTest` with explicit backend fixtures to exercise solved grids, failed and excluded queries, proof navigation, puzzle resets, and unavailable or malformed backend responses. Fixtures stay under `tests/`; the production app does not import them or read reference solutions for inference. End-to-end integration with real deductions still needs the backend implementation.
+Frontend tests use Streamlit's `AppTest` with explicit backend fixtures to exercise solved grids, failed and excluded queries, single-cell proof navigation, full-solve replay with optional trace fixtures, puzzle resets, and unavailable or malformed backend responses. Fixtures stay under `tests/`; the production app does not import them or read reference solutions for inference. End-to-end integration with real deductions still needs the backend implementation.
 
 The app resolves `puzzles.json` relative to its own file, so it also runs when launched from another working directory. For the repository's theme settings, launch from the repository root as shown above.
 
