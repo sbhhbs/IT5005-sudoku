@@ -27,7 +27,7 @@ h1,h2,h3 {color:#243d33; letter-spacing:-.035em;}
 .board-wrap {width:100%; max-width:540px; margin:12px auto;}
 .sudoku {width:100%; table-layout:fixed; border-collapse:collapse;}
 .sudoku th {background:#faf9f6; color:#698173; font:500 12px/1.5 sans-serif; text-align:center; height:26px;}
-.sudoku td {border:1px solid #d6dfd6; text-align:center; height:49px; font:550 22px/1.15 sans-serif; color:#197352;}
+.sudoku td {border:1px solid #d6dfd6; text-align:center; height:clamp(30px, 4vw, 49px); font:550 22px/1.15 sans-serif; color:#197352;}
 .sudoku td {background:white;}
 .sudoku td:first-of-type {border-left:2px solid #416152;}
 .sudoku tbody tr:first-child td {border-top:2px solid #416152;}
@@ -326,7 +326,7 @@ def main():
         st.caption('Forward chaining builds from known facts. Backward chaining works from a question toward supporting facts.')
         solve_column, reset_column = st.columns([2, 1])
         solve_pressed = solve_column.button('Solve puzzle', type='primary', use_container_width=True, key='solve')
-        reset_column.button('Reset board', use_container_width=True, key='reset', on_click=clear_results)
+        reset_column.button('Reset', use_container_width=True, key='reset', on_click=clear_results)
         if solve_pressed:
             st.session_state.pop('solution_result', None)
             st.session_state.pop('solve_feedback', None)
