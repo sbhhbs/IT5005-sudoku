@@ -81,6 +81,10 @@ def test_real_starter_loads_from_another_working_directory(monkeypatch, tmp_path
     assert not app.exception
     assert app.title[0].value == 'Group 23 - Sudoku Solver'
     assert len(app.selectbox[0].options) == 5
+    assert [tab.label for tab in app.tabs] == ['Solve the grid', 'Ask about cell', 'Knowledge base explore']
+    assert app.tabs[0].button(key='solve').label == 'Solve puzzle'
+    assert app.tabs[1].button(key='check_cell').label == 'Check & explain'
+    assert app.tabs[2].button(key='build_kb').label == 'Generate knowledge base'
 
 
 @pytest.mark.parametrize('method', ['Forward chaining', 'Backward chaining'])

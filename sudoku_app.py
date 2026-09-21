@@ -37,16 +37,17 @@ h1,h2,h3 {color:#243d33; letter-spacing:-.035em;}
 .sudoku td.support {background:#dceee7; box-shadow:inset 0 0 0 1px #7bad98;}
 .board-legend {color:#597165; text-align:center; font-size:13px; line-height:1.8; margin:12px 0 18px;}
 .board-legend b {font-weight:700;}
-.st-key-board_grid {max-width:540px; margin:12px auto; gap:0;}
+.st-key-board_grid {width:100%; margin:8px auto; gap:0;}
 .st-key-board_grid [data-testid="stVerticalBlock"] {gap:0;}
 .st-key-board_grid [data-testid="stHorizontalBlock"] {gap:0; flex-wrap:nowrap;}
 .st-key-board_grid [data-testid="stColumn"] {min-width:0 !important;}
-.st-key-board_grid button {width:100%; min-height:0; height:clamp(30px,4vw,49px); padding:0;
+.st-key-board_grid button {width:100%; min-height:0; height:clamp(34px,5vw,60px); padding:0;
  border:1px solid #d6dfd6; border-radius:0; background:white; color:#197352;}
-.st-key-board_grid button p {font-size:21px; font-weight:600;}
+.st-key-board_grid button p {font-size:clamp(18px,2.5vw,26px); font-weight:600;}
 .st-key-board_grid button:hover {background:#e4eee7; border-color:#416152;}
 .st-key-board_grid button:focus-visible {outline:3px solid #197352; outline-offset:-4px;}
 .grid-index {text-align:center; color:#698173; font:500 12px/1.5 sans-serif; padding:6px 0;}
+.st-key-board_grid .row-index {height:clamp(34px,5vw,60px); display:flex; align-items:center; justify-content:center; padding:0;}
 @media(max-width:600px) {
  .block-container {padding-top:1.3rem;}
  .sudoku td {height:33px; font-size:18px;}
@@ -319,7 +320,7 @@ def render_selectable_board(values, givens, n, box_h, box_w):
             columns[c].html(f'<div class="grid-index">{c}</div>')
         for r in range(1, n + 1):
             columns = st.columns([0.5] + [1] * n)
-            columns[0].html(f'<div class="grid-index">{r}</div>')
+            columns[0].html(f'<div class="grid-index row-index">{r}</div>')
             for c in range(1, n + 1):
                 value = values.get((r, c))
                 key = f'cell_{r}_{c}'
@@ -459,7 +460,6 @@ def reset_kb_page():
 
 
 def render_kb_inspector(n, box_h, box_w, givens, puzzle_number):
-    st.divider()
     st.subheader('Explore the knowledge base')
     st.write('See the facts and rules that represent this puzzle, before inference begins.')
     representation = st.radio('Knowledge representation', ['General / CNF', 'Definite / Horn'],
@@ -467,9 +467,6 @@ def render_kb_inspector(n, box_h, box_w, givens, puzzle_number):
     if representation == 'General / CNF':
         st.caption('General clauses → resolution or truth-table checking. The general builder stores '
                    'its clauses in conjunctive normal form (CNF). Each displayed line is joined by AND.')
-        st.info('The full-grid controls above use Horn rules with forward or backward chaining. '
-                'Resolution and truth-table experiments on the general KB belong in the notebook; '
-                'the supplied algorithms are impractical on the full 9×9 grid.')
     else:
         st.caption('Definite clauses → forward or backward chaining. View facts and implication rules, '
                    'or their equivalent CNF. Not-prefixed names are positive atoms, not logical negations.')
@@ -708,8 +705,8 @@ def render_tutor(result, givens, n, box_h, box_w):
 
 def main():
     st.set_page_config(page_title='Group 23 - Sudoku Solver', page_icon='🧩', layout='wide')
-    # Query submission reruns before reaching the walkthrough widgets. Keep
-    # their state owned by the session so that widget cleanup cannot erase it.
+    # Action handlers can rerun before all tab widgets are rendered. Keep
+    # walkthrough state owned by the session across those intermediate runs.
     for key in ('solve_walk_step', 'solve_walk_mode'):
         if key in st.session_state:
             st.session_state[key] = st.session_state[key]
@@ -720,35 +717,33 @@ def main():
     st.write('Every number has a reason. Solve a puzzle, ask about a cell, and follow the logic.')
     st.divider()
 
-    board_column, controls_column = st.columns([1.1, 1], gap='large')
-    with board_column:
+    puzzle_column, reset_column = st.columns([4, 1], vertical_alignment='bottom')
+    with puzzle_column:
         selected = st.selectbox('Choose a puzzle', range(len(puzzles)), key='puzzle_index',
                                 format_func=lambda i: f'Puzzle {i + 1} · {puzzles[i]["given_count"]} givens',
                                 on_change=clear_results)
-        givens = puzzles[selected]['givens']
-        solved = st.session_state.get('solution_result')
-        values = solved['grid'] if solved else givens
-        if 'selected_cell' not in st.session_state:
-            first_empty = next(((r, c) for r in range(1, n + 1) for c in range(1, n + 1)
-                                if (r, c) not in givens), (1, 1))
-            st.session_state.selected_cell = None
-            st.session_state.query_row, st.session_state.query_col = first_empty
-        render_selectable_board(values, givens, n, box_h, box_w)
-        st.html('<div class="board-legend"><b>Dark numbers</b> · original clues &nbsp; '
-                '<span style="color:#197352">Green numbers</span> · deduced</div>')
-        if solved:
-            st.success(f'{n*n} / {n*n} cells solved · {solved["algorithm"]} · {solved["elapsed"]:.3f} s')
-        else:
-            st.caption(f'{n} × {n} grid · {box_h} × {box_w} boxes · {n*n-len(givens)} empty cells')
+    reset_column.button('Reset', use_container_width=True, key='reset', on_click=clear_results)
+    givens = puzzles[selected]['givens']
+    solved = st.session_state.get('solution_result')
+    values = solved['grid'] if solved else givens
+    if 'selected_cell' not in st.session_state:
+        first_empty = next(((r, c) for r in range(1, n + 1) for c in range(1, n + 1)
+                            if (r, c) not in givens), (1, 1))
+        st.session_state.selected_cell = None
+        st.session_state.query_row, st.session_state.query_col = first_empty
+    render_selectable_board(values, givens, n, box_h, box_w)
+    st.html('<div class="board-legend"><b>Dark numbers</b> · original clues &nbsp; '
+            '<span style="color:#197352">Green numbers</span> · deduced</div>')
+    if not solved:
+        st.caption(f'{n} × {n} grid · {box_h} × {box_w} boxes · {n*n-len(givens)} empty cells')
 
-    with controls_column:
+    solve_tab, query_tab, kb_tab = st.tabs(['Solve the grid', 'Ask about cell', 'Knowledge base explore'])
+    with solve_tab:
         st.subheader('Solve the whole board')
         algorithm = st.radio('Inference method', ['Forward chaining', 'Backward chaining'], key='algorithm', horizontal=True)
         st.caption('Both methods use the definite / Horn KB. Forward chaining builds from facts; '
                    'backward chaining works from a question toward supporting facts.')
-        solve_column, reset_column = st.columns([2, 1])
-        solve_pressed = solve_column.button('Solve puzzle', type='primary', use_container_width=True, key='solve')
-        reset_column.button('Reset', use_container_width=True, key='reset', on_click=clear_results)
+        solve_pressed = st.button('Solve puzzle', type='primary', key='solve')
         if solve_pressed:
             st.session_state.pop('solution_result', None)
             st.session_state.pop('solve_feedback', None)
@@ -765,11 +760,16 @@ def main():
                     st.session_state.solve_feedback = {'kind': 'warning', 'text': str(error)}
             st.rerun()
         feedback('solve_feedback')
+        if solved:
+            st.success(f'{n*n} / {n*n} cells solved · {solved["algorithm"]} · {solved["elapsed"]:.3f} s')
         with st.expander('What if a puzzle has multiple solutions?'):
             st.write('These rules infer only forced values; they do not guess or choose between solutions. '
                      'An ambiguous puzzle remains incomplete. An incomplete result may also mean the rules '
                      'need stronger reasoning, so it does not establish how many solutions exist.')
-        st.divider()
+        if st.session_state.get('solution_result'):
+            render_solve_walkthrough(st.session_state.solution_result, givens, n, box_h, box_w)
+
+    with query_tab:
         st.subheader('Ask about one cell')
         st.write('Does the puzzle imply that this cell has this value?')
         row_column, col_column, value_column = st.columns(3)
@@ -798,11 +798,11 @@ def main():
         else:
             st.caption('Check a cell to see its verdict and, when available, a step-by-step explanation.')
 
-    if st.session_state.get('solution_result'):
-        render_solve_walkthrough(st.session_state.solution_result, givens, n, box_h, box_w)
-    if st.session_state.get('query_result'):
-        render_tutor(st.session_state.query_result, givens, n, box_h, box_w)
-    render_kb_inspector(n, box_h, box_w, givens, selected + 1)
+        if st.session_state.get('query_result'):
+            render_tutor(st.session_state.query_result, givens, n, box_h, box_w)
+
+    with kb_tab:
+        render_kb_inspector(n, box_h, box_w, givens, selected + 1)
     st.divider()
     st.caption('Propositional logic · Elimination & last-candidate reasoning · No guessing')
 
