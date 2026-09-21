@@ -2,7 +2,7 @@
 
 Live app: [Group 23 - Sudoku Solver](https://it5005-group23-sudoku.streamlit.app)
 
-A shared project for Group 23. The Streamlit frontend supports puzzle selection, full-grid solver controls, targeted queries, and a proof viewer. The backend solver functions are still starter stubs; the conceptual answers remain to be completed.
+A shared project for Group 23. The Streamlit frontend supports puzzle selection, full-grid solver controls, targeted queries, a proof viewer, and a knowledge-base inspector. The backend solver functions are still starter stubs; the conceptual answers remain to be completed.
 
 ## Run locally
 
@@ -19,6 +19,12 @@ streamlit run sudoku_app.py
 The app loads all five puzzles and shows their original clues. Solve and query actions display a clear unavailable message while the corresponding backend function raises `NotImplementedError`. They connect to the real solver as its implementation arrives; reference solutions are never used as a fallback.
 
 The optional `pl_bc_entails_with_trace` helper enables the tutor view. If only plain backward chaining is ready, the app can display its verdict without a trace. A failed query is described as unproved unless a separate `Not` query establishes that the value is ruled out. See [the solver/UI contract](docs/solver-ui-contract.md) for the agreed formats.
+
+### Inspect the knowledge base
+
+Under **Explore the knowledge base**, choose **General / CNF** or **Definite / Horn**, then generate the selected puzzle's KB. The inspector shows actual stored clauses, symbol/fact counts, a case-insensitive search, 50 clauses per page, and a download of all clauses. Definite rules can be viewed as implications or converted to equivalent CNF with the provided logic library. The original formulas before `PropKB.tell` converts them are not retained, so the app does not reconstruct them.
+
+General and definite are knowledge representations. Resolution and truth-table checking operate on the general KB; the full-grid app uses FC/BC with the definite KB. The inspector builds and displays rules without invoking inference. Run the assignment's bounded resolution/model-checking experiments in the notebook, since the supplied algorithms are impractical on the full 9×9 grid. An unfinished builder shows an unavailable message, not sample clauses.
 
 For the notebook:
 

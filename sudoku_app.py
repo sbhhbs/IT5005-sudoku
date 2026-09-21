@@ -12,6 +12,7 @@ import time
 
 import streamlit as st
 import sudoku_solver
+from logic_ import PropKB, PropDefiniteKB, Expr, prop_symbols, to_cnf, conjuncts
 from sudoku_solver import (
     atom, build_definite_kb, build_general_kb, solve_full_grid_fc,
     solve_full_grid_bc, pl_bc_entails,
@@ -235,6 +236,127 @@ def clear_results():
     for key in ('solution_result', 'query_result', 'solve_feedback', 'query_feedback',
                 'query_row', 'query_col', 'query_value', 'proof_step'):
         st.session_state.pop(key, None)
+    clear_kb()
+
+
+def clear_kb():
+    """A KB snapshot belongs to one puzzle and one representation."""
+    for key in ('kb_result', 'kb_feedback', 'kb_search', 'kb_page', 'kb_notation'):
+        st.session_state.pop(key, None)
+
+
+def snapshot_kb(kb, representation, puzzle_number):
+    """Copy actual stored clauses and their CNF display; never run inference."""
+    required_type = PropDefiniteKB if representation == 'Definite / Horn' else PropKB
+    if not isinstance(kb, required_type):
+        raise ValueError(f'The builder must return a {required_type.__name__}.')
+    clauses, cnf, symbols = [], [], set()
+    facts = implications = 0
+    for clause in kb.clauses:
+        if not isinstance(clause, Expr) and type(clause) is not bool:
+            raise ValueError('The knowledge base contains an unsupported clause.')
+        clauses.append(str(clause))
+        symbols.update(str(symbol) for symbol in prop_symbols(clause))
+        if isinstance(clause, Expr):
+            facts += int(not clause.args and clause.op[:1].isupper())
+            implications += int(clause.op == '==>')
+        if representation == 'Definite / Horn' and isinstance(clause, Expr):
+            cnf.extend(str(part) for part in conjuncts(to_cnf(clause)))
+        else:
+            # PropKB.tell already stored each general clause in CNF.
+            cnf.append(str(clause))
+    return {'representation': representation, 'puzzle_number': puzzle_number,
+            'clauses': clauses, 'cnf': cnf, 'symbols': sorted(symbols),
+            'facts': facts, 'implications': implications}
+
+
+def kb_download(snapshot, notation):
+    """Export all clauses in the selected notation, independent of search/page."""
+    clauses = snapshot['cnf'] if notation == 'CNF' else snapshot['clauses']
+    title = (f'# Puzzle {snapshot["puzzle_number"]}: {snapshot["representation"]}\n'
+             f'# Notation: {notation}; clauses: {len(clauses)}\n'
+             '# All lines below are conjoined (AND).\n\n')
+    return title + '\n'.join(clauses) + '\n'
+
+
+def reset_kb_page():
+    st.session_state.pop('kb_page', None)
+
+
+def render_kb_inspector(n, box_h, box_w, givens, puzzle_number):
+    st.divider()
+    st.subheader('Explore the knowledge base')
+    st.write('See the facts and rules that represent this puzzle, before inference begins.')
+    representation = st.radio('Knowledge representation', ['General / CNF', 'Definite / Horn'],
+                              key='kb_representation', horizontal=True, on_change=clear_kb)
+    if representation == 'General / CNF':
+        st.caption('General clauses → resolution or truth-table checking. The general builder stores '
+                   'its clauses in conjunctive normal form (CNF). Each displayed line is joined by AND.')
+        st.info('The full-grid controls above use Horn rules with forward or backward chaining. '
+                'Resolution and truth-table experiments on the general KB belong in the notebook; '
+                'the supplied algorithms are impractical on the full 9×9 grid.')
+    else:
+        st.caption('Definite clauses → forward or backward chaining. View facts and implication rules, '
+                   'or their equivalent CNF. Not-prefixed names are positive atoms, not logical negations.')
+    if st.button('Generate knowledge base', key='build_kb'):
+        clear_kb()
+        builder = build_general_kb if representation == 'General / CNF' else build_definite_kb
+        with st.spinner('Generating facts and rules…'):
+            try:
+                started = time.perf_counter()
+                kb = builder(n, box_h, box_w, dict(givens))
+                elapsed = time.perf_counter() - started
+                snapshot = snapshot_kb(kb, representation, puzzle_number)
+                snapshot['elapsed'] = elapsed
+                st.session_state.kb_result = snapshot
+            except NotImplementedError:
+                st.session_state.kb_feedback = {'kind': 'info', 'text': f'The {representation} builder is not available yet. '
+                                               'Its actual clauses will appear here once it is implemented.'}
+            except ValueError as error:
+                st.session_state.kb_feedback = {'kind': 'warning', 'text': str(error)}
+    feedback('kb_feedback')
+    snapshot = st.session_state.get('kb_result')
+    if not snapshot:
+        return
+    count_col, symbol_col, fact_col = st.columns(3)
+    count_col.metric('Stored clauses', len(snapshot['clauses']))
+    symbol_col.metric('Propositional symbols', len(snapshot['symbols']))
+    fact_col.metric('Positive atomic facts', snapshot['facts'])
+    st.caption(f'Puzzle {snapshot["puzzle_number"]} · {snapshot["representation"]} · '
+               f'{snapshot["elapsed"]:.3f} s to build the KB')
+    if representation == 'Definite / Horn':
+        notation = st.radio('Display notation', ['Stored form', 'CNF'], key='kb_notation',
+                            horizontal=True, on_change=reset_kb_page)
+        st.caption(f'{snapshot["implications"]:,} stored implication rules. '
+                   'P & Q ==> R is equivalent to ~P | ~Q | R.')
+    else:
+        notation = 'CNF'
+        st.caption('These are the actual stored CNF clauses. The original formulas before conversion '
+                   'are not retained by PropKB, so they are not reconstructed here.')
+    clauses = snapshot['cnf'] if notation == 'CNF' else snapshot['clauses']
+    search = st.text_input('Search clauses', key='kb_search', placeholder='For example: Is1_2_3',
+                           on_change=reset_kb_page).strip()
+    matches = [(index, clause) for index, clause in enumerate(clauses, 1)
+               if search.casefold() in clause.casefold()]
+    page_size = 50
+    pages = max(1, (len(matches) + page_size - 1) // page_size)
+    page = st.number_input('Clause page', min_value=1, max_value=pages, value=1, step=1, key='kb_page')
+    visible = matches[(page - 1) * page_size:page * page_size]
+    st.caption(f'{len(matches):,} of {len(clauses):,} clauses match · Page {page} of {pages} · Up to 50 lines per page')
+    if visible:
+        st.code('\n'.join(f'{index:>5}. {clause}' for index, clause in visible), language='text')
+    else:
+        st.info('No clauses match this search.' if clauses else 'This knowledge base contains no clauses.')
+    slug = 'general' if representation == 'General / CNF' else 'definite'
+    st.download_button('Download all clauses', kb_download(snapshot, notation),
+                       file_name=f'puzzle-{puzzle_number}-{slug}-{notation.lower().replace(" ", "-")}.txt',
+                       mime='text/plain', key='download_kb')
+    with st.expander('How to read the symbols'):
+        st.markdown('`Is1_2_3`: row 1, column 2 has value 3.  \n'
+                    '`Not1_2_3`: the positive atom saying this value has been ruled out.  \n'
+                    '`~`: logical NOT · `|`: OR · `&`: AND · `==>`: implies.  \n'
+                    'For example, `~Is1_1_1 | ~Is1_2_1` prevents both cells from having value 1. '
+                    'This is a notation example, not an additional generated clause.')
 
 
 def feedback(key):
@@ -323,7 +445,8 @@ def main():
     with controls_column:
         st.subheader('Solve the whole board')
         algorithm = st.radio('Inference method', ['Forward chaining', 'Backward chaining'], key='algorithm', horizontal=True)
-        st.caption('Forward chaining builds from known facts. Backward chaining works from a question toward supporting facts.')
+        st.caption('Both methods use the definite / Horn KB. Forward chaining builds from facts; '
+                   'backward chaining works from a question toward supporting facts.')
         solve_column, reset_column = st.columns([2, 1])
         solve_pressed = solve_column.button('Solve puzzle', type='primary', use_container_width=True, key='solve')
         reset_column.button('Reset', use_container_width=True, key='reset', on_click=clear_results)
@@ -374,6 +497,7 @@ def main():
 
     if st.session_state.get('query_result'):
         render_tutor(st.session_state.query_result, givens, n, box_h, box_w)
+    render_kb_inspector(n, box_h, box_w, givens, selected + 1)
     st.divider()
     st.caption('Propositional logic · Elimination & last-candidate reasoning · No guessing')
 

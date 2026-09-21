@@ -260,3 +260,123 @@ def test_invalid_grid_rejected_and_rectangular_boxes_supported():
     assert rendered.count('border-right:2px') == 12
     assert rendered.count('border-bottom:2px') == 18
     assert 'selected cell' in rendered and 'supporting cell' in rendered
+
+
+def general_fixture_kb(*args):
+    from logic_ import PropKB
+    kb = PropKB()
+    kb.tell(ui.atom('Is', 1, 1, 1))
+    kb.tell(ui.atom('Is', 1, 4, 1) | ui.atom('Is', 1, 4, 4))
+    kb.tell(~ui.atom('Is', 1, 1, 1) | ~ui.atom('Is', 1, 4, 1))
+    return kb
+
+
+def definite_fixture_kb(*args):
+    from logic_ import PropDefiniteKB, Expr
+    kb = PropDefiniteKB()
+    kb.tell(ui.atom('Is', 1, 1, 1))
+    kb.tell(Expr('==>', ui.atom('Is', 1, 1, 1), ui.atom('Not', 1, 4, 1)))
+    return kb
+
+
+def test_general_inspector_builds_actual_clauses_without_inference(fixture_ui, monkeypatch):
+    calls = []
+    def build(n, h, w, givens):
+        calls.append((n, h, w, dict(givens)))
+        return general_fixture_kb()
+    def no_inference(*args):
+        raise AssertionError('Inspecting the KB must not run inference')
+    monkeypatch.setattr(ui, 'build_general_kb', build)
+    monkeypatch.setattr(ui, 'solve_full_grid_fc', no_inference)
+    monkeypatch.setattr(ui, 'pl_bc_entails', no_inference)
+    app = fixture_ui
+    app.button(key='build_kb').click().run()
+    assert not app.exception
+    assert calls == [(4, 2, 2, GIVENS)]
+    assert [metric.value for metric in app.metric] == ['3', '3', '1']
+    assert 'Is1_1_1' in app.code[0].value
+    app.text_input(key='kb_search').set_value('~Is1_1_1').run()
+    assert not app.exception
+    assert len(app.code[0].value.splitlines()) == 1
+    assert app.code[0].value.strip().startswith('3.')
+    # Download contains all clauses even while the view is filtered.
+    download = ui.kb_download(app.session_state.kb_result, 'CNF')
+    assert '(Is1_4_1 | Is1_4_4)' in download
+    assert 'clauses: 3' in download
+    app.text_input(key='kb_search').set_value('nonexistent').run()
+    assert not app.code
+    assert any('No clauses match' in item.value for item in app.info)
+
+
+def test_definite_inspector_shows_equivalent_cnf(fixture_ui, monkeypatch):
+    monkeypatch.setattr(ui, 'build_definite_kb', definite_fixture_kb)
+    app = fixture_ui
+    app.radio(key='kb_representation').set_value('Definite / Horn').run()
+    app.button(key='build_kb').click().run()
+    assert not app.exception
+    assert '==>' in app.code[0].value
+    app.radio(key='kb_notation').set_value('CNF').run()
+    assert not app.exception
+    assert '==>' not in app.code[0].value
+    assert '~Is1_1_1' in app.code[0].value
+    assert 'Not1_4_1' in app.code[0].value
+    assert app.session_state.kb_result['implications'] == 1
+
+
+@pytest.mark.parametrize('action', ['reset', 'change_puzzle', 'change_representation'])
+def test_kb_snapshot_is_cleared_with_its_context(fixture_ui, monkeypatch, action):
+    monkeypatch.setattr(ui, 'build_general_kb', general_fixture_kb)
+    app = fixture_ui
+    app.button(key='build_kb').click().run()
+    assert 'kb_result' in app.session_state
+    if action == 'reset':
+        app.button(key='reset').click().run()
+    elif action == 'change_puzzle':
+        app.selectbox(key='puzzle_index').set_value(1).run()
+    else:
+        app.radio(key='kb_representation').set_value('Definite / Horn').run()
+    assert not app.exception
+    assert 'kb_result' not in app.session_state
+    assert not app.code
+
+
+def test_kb_pagination_resets_after_filter(fixture_ui, monkeypatch):
+    def larger_kb(*args):
+        kb = general_fixture_kb()
+        for _ in range(60):
+            kb.tell(ui.atom('Is', 1, 1, 1))
+        return kb
+    monkeypatch.setattr(ui, 'build_general_kb', larger_kb)
+    app = fixture_ui
+    app.button(key='build_kb').click().run()
+    assert len(app.code[0].value.splitlines()) == 50
+    app.number_input(key='kb_page').set_value(2).run()
+    assert len(app.code[0].value.splitlines()) == 13
+    app.text_input(key='kb_search').set_value('~Is1_1_1').run()
+    assert not app.exception
+    assert app.number_input(key='kb_page').value == 1
+    assert len(app.code[0].value.splitlines()) == 1
+
+
+def test_kb_unavailable_and_bad_result_are_visible(fixture_ui, monkeypatch):
+    def unavailable(*args):
+        raise NotImplementedError
+    monkeypatch.setattr(ui, 'build_general_kb', unavailable)
+    app = fixture_ui
+    app.button(key='build_kb').click().run()
+    assert not app.exception
+    assert any('General / CNF builder is not available yet' in item.value for item in app.info)
+    monkeypatch.setattr(ui, 'build_general_kb', lambda *args: None)
+    app.button(key='build_kb').click().run()
+    assert not app.exception
+    assert any('must return a PropKB' in item.value for item in app.warning)
+    assert 'kb_result' not in app.session_state
+
+
+def test_kb_snapshot_and_conversion_do_not_mutate_builder_result():
+    kb = definite_fixture_kb()
+    original = list(kb.clauses)
+    snapshot = ui.snapshot_kb(kb, 'Definite / Horn', 1)
+    snapshot['clauses'].clear()
+    snapshot['cnf'].clear()
+    assert kb.clauses == original
