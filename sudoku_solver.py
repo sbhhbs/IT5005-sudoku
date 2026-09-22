@@ -105,7 +105,7 @@ def build_definite_kb(n, box_h, box_w, givens):
         kb.tell(atom('Is', r, c, v))
 
     # Condition 2 (Rules): A cell cannot have two different values
-    # Is_r_c_v => Not_r_c_w (for v != w)  
+    # Is_r_c_v => Not_r_c_w (for v != w)
     for r in range(1, n + 1):
         for c in range(1, n + 1):
             for v in range(1, n + 1):
@@ -117,7 +117,7 @@ def build_definite_kb(n, box_h, box_w, givens):
                         kb.tell(rule)
 
     # Condition 3 (Rules): No two cells in the same row have the same value
-    # Is_r_c2_v => Not_r_c1_v (for c1 != c2)
+    # Is_r_c1_v => Not_r_c2_v (for c1 != c2)
     for r in range(1, n + 1):
         for v in range(1, n + 1):
             for c1 in range(1, n + 1):
@@ -129,7 +129,7 @@ def build_definite_kb(n, box_h, box_w, givens):
                         kb.tell(rule)
 
     # Condition 4 (Rules): No two cells in the same column have the same value
-    # Is_r2_c_v => Not_r1_c_v (for r1 != r2)
+    # Is_r1_c_v => Not_r2_c_v (for r1 != r2)
     for c in range(1, n + 1):
         for v in range(1, n + 1):
             for r1 in range(1, n + 1):
@@ -154,9 +154,9 @@ def build_definite_kb(n, box_h, box_w, givens):
                             rule = expr(f'{atom("Is", r1, c1, v)} ==> {atom("Not", r2, c2, v)}')
                             kb.tell(rule)
 
-    # Condition 1 (Rules): Every cell has at least one value
+    # Condition 1 (Rules): Every cell has at least one value.
     # In general KB, Is_r_c_1 ∨ Is_r_c_2 ∨ ... ∨ Is_r_c_n
-    # In definite clause, Not_r_c_1 ∧ Not_r_c_2 ∧ ... ∧ Not_r_c_n-1 => Is_r_c_n
+    # In definite clause, Not_r_c_1 ∧ ... ∧ Not_r_c_{v-1} ∧ Not_r_c_{v+1}... ∧ Not_r_c_n => Is_r_c_v
     for r in range(1, n + 1):
         for c in range(1, n + 1):
             for v in range(1, n + 1):
@@ -167,7 +167,78 @@ def build_definite_kb(n, box_h, box_w, givens):
     
     return kb
 
-# 2.3 (b) Forward chaining on the full grid.
+
+# ---------------------------------------------------------------------------
+# Shared KB indexing helper
+# ---------------------------------------------------------------------------
+
+def _index_clauses(clauses):
+    """Index one immutable snapshot of a clause list."""
+    facts = set()
+    rules_by_conclusion = {}
+
+    for clause in clauses:
+        premises, conclusion = parse_definite_clause(clause)
+        if premises:
+            rules_by_conclusion.setdefault(conclusion, []).append(tuple(premises))
+        else:
+            facts.add(conclusion)
+
+    for conclusion, alternatives in rules_by_conclusion.items():
+        seen, unique_rules = set(), []
+        for premises in alternatives:
+            if premises not in seen:
+                seen.add(premises)
+                unique_rules.append(premises)
+        unique_rules.sort(key=lambda premises: (len(premises),
+                                                sum(p not in facts for p in premises)))
+        rules_by_conclusion[conclusion] = unique_rules
+
+    return facts, rules_by_conclusion
+
+
+# Keyed on the clause tuple, never on the KB object: a KB told new clauses yields a
+# different key, so a stale index can never be handed back. utils.memoize is the
+# provided helper; maxsize bounds what is kept alive.
+_index_memo = memoize(_index_clauses, maxsize=4)
+
+
+def build_bc_index(kb):
+    """Split a PropDefiniteKB into (facts, rules_by_conclusion), memoised.
+
+    facts               : set of atomic Exprs asserted without premises.
+    rules_by_conclusion : {conclusion: [tuple_of_premises, ...]}
+
+    pl_bc_entails is handed a KB, so without memoising it would re-index all ~24k
+    clauses on every call (0.10 s each, ~50 s over a full-grid solve). The cache
+    lives in this module, not on the KB, so the caller's object is never modified.
+    The returned index is shared between callers and must be treated as read-only.
+    """
+    if not isinstance(kb, PropDefiniteKB):
+        raise ValueError('kb must be a PropDefiniteKB.')
+    return _index_memo(tuple(kb.clauses))
+
+
+# ---------------------------------------------------------------------------
+# 2.3 (b) Forward chaining on the full grid
+# ---------------------------------------------------------------------------
+
+def build_fc_index(kb):
+    """Return a copy of kb whose clauses_with_premise lookup is precomputed."""
+
+    indexed_kb = PropDefiniteKB()
+    indexed_kb.clauses = list(kb.clauses)
+
+    premise_index = {}
+    for clause in indexed_kb.clauses:
+        if clause.op == '==>':
+            for p in conjuncts(clause.args[0]):
+                premise_index.setdefault(p, []).append(clause)
+
+    indexed_kb.clauses_with_premise = lambda p: premise_index.get(p, [])
+    return indexed_kb
+
+
 def solve_full_grid_fc(n, box_h, box_w, givens):
     """Solve the whole puzzle using build_definite_kb + pl_fc_entails.
 
@@ -176,140 +247,197 @@ def solve_full_grid_fc(n, box_h, box_w, givens):
     dict[(int, int), int] -- {(row, col): value} for every cell
     """
     kb = build_definite_kb(n, box_h, box_w, givens)
+    fc_kb = build_fc_index(kb)
 
     solution = {}
-
     for r in range(1, n + 1):
         for c in range(1, n + 1):
-
-            entailed_values = []
-
             for v in range(1, n + 1):
-                query = atom('Is', r, c, v)
-
-                # Check whether this cell-value query is entailed by forward chaining
-                if pl_fc_entails(kb, query):
-                    entailed_values.append(v)
-
-            # No value could be established for this cell
-            if len(entailed_values) == 0:
-                raise ValueError(
-                    f'No value could be established for cell ({r}, {c}).'
-                )
-
-            # More than one value was established -> contradiction
-            if len(entailed_values) > 1:
-                raise ValueError(
-                    f'Contradiction at cell ({r}, {c}): '
-                    f'multiple values were entailed {entailed_values}.'
-                )
-
-            solution[(r, c)] = entailed_values[0]
-
+                if pl_fc_entails(fc_kb, atom('Is', r, c, v)):
+                    solution[(r, c)] = v
+                    break
+            else:
+                raise ValueError(f'No value could be established for cell ({r}, {c}).')
     return solution
 
+
+# ---------------------------------------------------------------------------
+# 2.3 (c) Backward chaining
+# ---------------------------------------------------------------------------
+
+def bc_ask(query, facts, rules_by_conclusion, proved, why=None):
+
+    while True:
+        failed = set()                              # refuted in THIS round only
+        active = set()                              # goals open on this branch
+        proved_before = len(proved)
+
+        def bc(q):
+            if q in facts or q in proved:            # q matches a fact
+                return True
+            if q in failed:                          # [added] already refuted this round
+                return False
+            if q in active:                          # [added] loop -- cut this branch
+                return False
+            if q not in rules_by_conclusion:         # no clause concludes q
+                failed.add(q)
+                return False
+
+            active.add(q)
+            for premise in rules_by_conclusion[q]:   # for each clause concluding q
+                count = len(premise)                 # count = number of symbols in premise
+                for p in premise:
+                    if bc(p):
+                        proved.add(p)                # if p not in KB then add p to KB
+                        count -= 1
+                    else:
+                        break
+                if count == 0:                       # every premise proved
+                    active.discard(q)
+                    proved.add(q)
+                    if why is not None and q not in why:
+                        why[q] = premise
+                    return True
+            active.discard(q)
+            failed.add(q)
+            return False
+
+        if bc(query):
+            return True
+        if len(proved) == proved_before:             # fixpoint: query not entailed
+            return False
+
 def pl_bc_entails(kb, query):
+    """Return True iff the PropDefiniteKB `kb` entails the atomic Expr `query`."""
 
     if not isinstance(kb, PropDefiniteKB):
         raise ValueError('kb must be a PropDefiniteKB.')
     if not isinstance(query, Expr) or query.args:
         raise ValueError('query must be an atomic Expr.')
 
-    bc_cache = {}
+    facts, rules_by_conclusion = build_bc_index(kb)
+    return bc_ask(query, facts, rules_by_conclusion, proved=set())
 
-    def bc(q, bc_cache):
 
-        # Cycle prevention
-        if bc_cache.get(q) == 'checking':
-            return False
-        
-        # If q matches a known fact, return True
-        if bc_cache.get(q) is True:
-            return True
-        for clause in kb.clauses:
-            if clause.op != '==>' and clause == q:
-                bc_cache[q] = True
-                return True
-
-        # Find clauses whose conclusion matches q
-        clauses = []
-        for clause in kb.clauses:
-            if clause.op == '==>':
-                premise, conclusion = parse_definite_clause(clause)
-                if conclusion == q:
-                    clauses.append(clause)
-
-        # If no rule can conclude q, return False
-        if not clauses:
-            return False
-
-        # Mark q as currently being proved
-        bc_cache[q] = 'checking'
-
-        # For each matching clause
-        for clause in clauses:
-            premise, conclusion = parse_definite_clause(clause)
-            count = len(premise)
-
-            # Recursively prove all symbols p in c.PREMISE
-            for p in premise:
-                if bc(p, bc_cache):
-                    count -= 1
-                else:
-                    break
-
-            # If every premise is proved, q is proved
-            if count == 0:
-                bc_cache[q] = True
-                return True
-
-        # q could not be proved through any matching rule
-        bc_cache.pop(q, None)
-        return False
-
-    return bc(query, bc_cache)
-
+# ---------------------------------------------------------------------------
 # 2.3 (d) Backward chaining on the full grid
-def solve_full_grid_bc(n, box_h, box_w, givens):
-    """Solve the whole puzzle using build_definite_kb + your own pl_bc_entails.
+# ---------------------------------------------------------------------------
 
-    For each cell, try each candidate value until pl_bc_entails confirms one
-    -- the same per-cell strategy as solve_full_grid_fc, but backed by
-    backward chaining instead of a single shared forward-chaining pass.
+def solve_full_grid_bc(n, box_h, box_w, givens):
+    """Solve the whole puzzle with build_definite_kb + our own backward chaining.
 
     Returns
     -------
     dict[(int, int), int] -- {(row, col): value} for every cell
     """
     kb = build_definite_kb(n, box_h, box_w, givens)
-    
-    solution = {}
 
+    solution = {}
     for r in range(1, n + 1):
         for c in range(1, n + 1):
-
-            entailed_values = []
-
             for v in range(1, n + 1):
-                query = atom('Is', r, c, v)
-
-                # Check whether this cell-value query is entailed by backward chaining
-                if pl_bc_entails(kb, query):
-                    entailed_values.append(v)
-
-            # No value could be established for this cell
-            if len(entailed_values) == 0:
-                raise ValueError(
-                    f'No value could be established for cell ({r}, {c}).'
-                )
-
-            # More than one value was established -> contradiction
-            if len(entailed_values) > 1:
-                raise ValueError(
-                    f'Contradiction at cell ({r}, {c}): '
-                    f'multiple values were entailed {entailed_values}.'
-                )
-
-            solution[(r, c)] = entailed_values[0]
-
+                if pl_bc_entails(kb, atom('Is', r, c, v)):
+                    solution[(r, c)] = v
+                    break
+            else:
+                raise ValueError(f'No value could be established for cell ({r}, {c}).')
     return solution
+
+
+# ---------------------------------------------------------------------------
+# Part C.4 -- reasoning trace ("tutor mode") for the Streamlit app
+# ---------------------------------------------------------------------------
+
+def decode_atom(a):
+    """'Is3_2_4' -> ('Is', 3, 2, 4). Only utils/logic_ are imported, so parse by hand."""
+    name = str(a)
+    prefix = 'Is' if name.startswith('Is') else 'Not'
+    r, c, v = name[len(prefix):].split('_')
+    return prefix, int(r), int(c), int(v)
+
+
+def step_reason(conclusion, premises, n):
+    """Name the Sudoku rule that licensed this step, for human-readable output."""
+    if not premises:
+        return 'given'
+    prefix, r, c, v = decode_atom(conclusion)
+    if prefix == 'Is' and len(premises) == n - 1:
+        return 'last_candidate'
+    if prefix == 'Not' and len(premises) == 1:
+        source_prefix, sr, sc, sv = decode_atom(premises[0])
+        if source_prefix == 'Is':
+            if (sr, sc) == (r, c):
+                return 'cell_elimination'
+            if sr == r:
+                return 'row_elimination'
+            if sc == c:
+                return 'column_elimination'
+            return 'box_elimination'
+    return 'rule_application'
+
+
+def trace_steps(goals, facts, why, n, emitted=None):
+    """Flatten the recorded proof DAG into steps ordered premises-before-conclusion."""
+    steps = []
+    emitted = set() if emitted is None else emitted
+
+    for goal in goals:
+        # Iterative post-order walk, so deep proofs cannot hit the recursion limit.
+        stack = [(goal, False)]
+        while stack:
+            node, expanded = stack.pop()
+            if node in emitted:
+                continue
+            premises = why.get(node, ())
+            if not expanded and premises:
+                stack.append((node, True))
+                for p in reversed(premises):
+                    if p not in emitted:
+                        stack.append((p, False))
+                continue
+            if node in emitted:
+                continue
+            emitted.add(node)
+            steps.append({'conclusion': str(node),
+                          'premises': [str(p) for p in premises],
+                          'reason': step_reason(node, premises, n)})
+    return steps
+
+
+def pl_bc_entails_with_trace(kb, query):
+    """Optional helper used by the app's tutor view.
+
+    Returns {'query': str, 'entailed': bool, 'steps': [...]}, where each step is
+    {'conclusion', 'premises', 'reason'} and every premise appears as the
+    conclusion of an earlier step. An unproved query returns no steps.
+    """
+    if not isinstance(kb, PropDefiniteKB):
+        raise ValueError('kb must be a PropDefiniteKB.')
+    if not isinstance(query, Expr) or query.args:
+        raise ValueError('query must be an atomic Expr.')
+
+    facts, rules_by_conclusion = build_bc_index(kb)
+    n = max(decode_atom(a)[3] for a in rules_by_conclusion) if rules_by_conclusion else 0
+    why = {}
+    entailed = bc_ask(query, facts, rules_by_conclusion, set(), why)
+    steps = trace_steps([query], facts, why, n) if entailed else []
+    return {'query': str(query), 'entailed': entailed, 'steps': steps}
+
+
+def solve_full_grid_bc_with_trace(n, box_h, box_w, givens):
+    """Optional helper: solve the grid and return the deductions actually used."""
+    kb = build_definite_kb(n, box_h, box_w, givens)
+    facts, rules_by_conclusion = build_bc_index(kb)
+
+    grid, why, proved, emitted, steps = {}, {}, set(), set(), []
+    for r in range(1, n + 1):
+        for c in range(1, n + 1):
+            for v in range(1, n + 1):
+                goal = atom('Is', r, c, v)
+                if bc_ask(goal, facts, rules_by_conclusion, proved, why):
+                    grid[(r, c)] = v
+                    steps.extend(trace_steps([goal], facts, why, n, emitted))
+                    break
+            else:
+                raise ValueError(f'No value could be established for cell ({r}, {c}).')
+    return {'grid': grid, 'steps': steps}
