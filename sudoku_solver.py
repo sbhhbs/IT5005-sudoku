@@ -97,9 +97,75 @@ def build_definite_kb(n, box_h, box_w, givens):
     -------
     PropDefiniteKB
     """
-    raise NotImplementedError(
-        'build_definite_kb: encode the puzzle as definite clauses'
-    )
+    kb = PropDefiniteKB()
+
+    # Rule 6 (Facts): givens directly imply Is_r_c_v
+    # Is_r_c_v
+    for (r, c), v in givens.items():
+        kb.tell(atom('Is', r, c, v))
+
+    # Rule 2: A cell cannot have two different values
+    # Is_r_c_v => Not_r_c_w (for v != w)  
+    for r in range(1, n + 1):
+        for c in range(1, n + 1):
+            for v in range(1, n + 1):
+                for w in range(1, n + 1):
+                    if v != w:
+                        # If (1,1)=3, then the (1,1) cell cannot have any other value:
+                        # Is1_1_3 ==> Not1_1_1, Is1_1_3 ==> Not1_1_2, Is1_1_3 ==> Not1_1_4 ... Is1_1_3 ==> Not1_1_9
+                        rule = expr(f'{atom("Is", r, c, v)} ==> {atom("Not", r, c, w)}')
+                        kb.tell(rule)
+
+    # Rule 3: No two cells in the same row have the same value
+    # Is_r_c2_v => Not_r_c1_v (for c1 != c2)
+    for r in range(1, n + 1):
+        for v in range(1, n + 1):
+            for c1 in range(1, n + 1):
+                for c2 in range(1, n + 1):
+                    if c1 != c2:
+                        # If (1,1)=3, then every other cell in row 1 cannot be 3:
+                        # Is1_1_3 ==> Not1_2_3, Is1_1_3 ==> Not1_3_3, ... Is1_1_3 ==> Not1_9_3
+                        rule = expr(f'{atom("Is", r, c1, v)} ==> {atom("Not", r, c2, v)}')
+                        kb.tell(rule)
+
+    # Rule 4: No two cells in the same column have the same value
+    # Is_r2_c_v => Not_r1_c_v (for r1 != r2)
+    for c in range(1, n + 1):
+        for v in range(1, n + 1):
+            for r1 in range(1, n + 1):
+                for r2 in range(1, n + 1):
+                    if r1 != r2:
+                        rule = expr(f'{atom("Is", r1, c, v)} ==> {atom("Not", r2, c, v)}')
+                        kb.tell(rule)
+
+    # Rule 5: No two cells in the same box have the same value
+    # Is_r1_c1_v => Not_r2​_c2​_v, where (r1,c1) and (r2,c2) are in the same box
+    for box_r in range(n // box_h):
+        for box_c in range(n // box_w):
+            cells_in_box = []
+            for r in range(box_r * box_h + 1, (box_r + 1) * box_h + 1):
+                for c in range(box_c * box_w + 1, (box_c + 1) * box_w + 1):
+                    cells_in_box.append((r, c))
+
+            for v in range(1, n + 1):
+                for (r1, c1) in cells_in_box:
+                    for (r2, c2) in cells_in_box:
+                        if (r1, c1) != (r2, c2):
+                            rule = expr(f'{atom("Is", r1, c1, v)} ==> {atom("Not", r2, c2, v)}')
+                            kb.tell(rule)
+
+    # Rule 1: Every cell has at least one value
+    # In general KB, Is_r_c_1 ∨ Is_r_c_2 ∨ ... ∨ Is_r_c_n
+    # In definite clause, Not_r_c_1 ∧ Not_r_c_2 ∧ ... ∧ Not_r_c_n-1 => Is_r_c_n
+    for r in range(1, n + 1):
+        for c in range(1, n + 1):
+            for v in range(1, n + 1):
+                other_values = [atom('Not', r, c, w) for w in range(1, n + 1) if w != v]
+                antecedent = associate('&', other_values)
+                rule = Expr('==>', antecedent, atom('Is', r, c, v))
+                kb.tell(rule)
+    
+    return kb
 
 
 def solve_full_grid_fc(n, box_h, box_w, givens):
