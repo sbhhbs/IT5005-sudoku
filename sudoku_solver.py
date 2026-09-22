@@ -208,24 +208,68 @@ def solve_full_grid_fc(n, box_h, box_w, givens):
 
     return solution
 
-
 def pl_bc_entails(kb, query):
-    """Your own backward-chaining implementation.
 
-    Parameters
-    ----------
-    kb : PropDefiniteKB
-    query : Expr
+    if not isinstance(kb, PropDefiniteKB):
+        raise ValueError('kb must be a PropDefiniteKB.')
+    if not isinstance(query, Expr) or query.args:
+        raise ValueError('query must be an atomic Expr.')
 
-    Returns
-    -------
-    bool
-    """
-    raise NotImplementedError(
-        'pl_bc_entails: implement backward chaining, soundly'
-    )
+    bc_cache = {}
 
+    def bc(q, bc_cache):
 
+        # Cycle prevention
+        if bc_cache.get(q) == 'checking':
+            return False
+        
+        # If q matches a known fact, return True
+        if bc_cache.get(q) is True:
+            return True
+        for clause in kb.clauses:
+            if clause.op != '==>' and clause == q:
+                bc_cache[q] = True
+                return True
+
+        # Find clauses whose conclusion matches q
+        clauses = []
+        for clause in kb.clauses:
+            if clause.op == '==>':
+                premise, conclusion = parse_definite_clause(clause)
+                if conclusion == q:
+                    clauses.append(clause)
+
+        # If no rule can conclude q, return False
+        if not clauses:
+            return False
+
+        # Mark q as currently being proved
+        bc_cache[q] = 'checking'
+
+        # For each matching clause
+        for clause in clauses:
+            premise, conclusion = parse_definite_clause(clause)
+            count = len(premise)
+
+            # Recursively prove all symbols p in c.PREMISE
+            for p in premise:
+                if bc(p, bc_cache):
+                    count -= 1
+                else:
+                    break
+
+            # If every premise is proved, q is proved
+            if count == 0:
+                bc_cache[q] = True
+                return True
+
+        # q could not be proved through any matching rule
+        bc_cache.pop(q, None)
+        return False
+
+    return bc(query, bc_cache)
+
+# 2.3 (d) Backward chaining on the full grid
 def solve_full_grid_bc(n, box_h, box_w, givens):
     """Solve the whole puzzle using build_definite_kb + your own pl_bc_entails.
 
