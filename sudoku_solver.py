@@ -12,7 +12,7 @@ def atom(prefix, r, c, v):
     """prefix is 'Is' or 'Not'. Returns the Expr for e.g. Is3_2_4."""
     return expr(f'{prefix}{r}_{c}_{v}')
 
-
+# 2.2.2. Build KB
 def build_general_kb(n, box_h, box_w, givens):
     """Return a PropKB encoding this n x n Sudoku's constraints plus the given
     cells, as general clauses.
@@ -83,7 +83,7 @@ def build_general_kb(n, box_h, box_w, givens):
 
     return kb
 
-
+# 2.2.2. Build KB
 def build_definite_kb(n, box_h, box_w, givens):
     """Return a PropDefiniteKB encoding this n x n Sudoku's constraints plus
     the given cells, using elimination + last-candidate reasoning.
@@ -99,12 +99,12 @@ def build_definite_kb(n, box_h, box_w, givens):
     """
     kb = PropDefiniteKB()
 
-    # Rule 6 (Facts): givens directly imply Is_r_c_v
+    # Condition 6 (Facts): givens directly imply Is_r_c_v
     # Is_r_c_v
     for (r, c), v in givens.items():
         kb.tell(atom('Is', r, c, v))
 
-    # Rule 2: A cell cannot have two different values
+    # Condition 2 (Rules): A cell cannot have two different values
     # Is_r_c_v => Not_r_c_w (for v != w)  
     for r in range(1, n + 1):
         for c in range(1, n + 1):
@@ -116,7 +116,7 @@ def build_definite_kb(n, box_h, box_w, givens):
                         rule = expr(f'{atom("Is", r, c, v)} ==> {atom("Not", r, c, w)}')
                         kb.tell(rule)
 
-    # Rule 3: No two cells in the same row have the same value
+    # Condition 3 (Rules): No two cells in the same row have the same value
     # Is_r_c2_v => Not_r_c1_v (for c1 != c2)
     for r in range(1, n + 1):
         for v in range(1, n + 1):
@@ -128,7 +128,7 @@ def build_definite_kb(n, box_h, box_w, givens):
                         rule = expr(f'{atom("Is", r, c1, v)} ==> {atom("Not", r, c2, v)}')
                         kb.tell(rule)
 
-    # Rule 4: No two cells in the same column have the same value
+    # Condition 4 (Rules): No two cells in the same column have the same value
     # Is_r2_c_v => Not_r1_c_v (for r1 != r2)
     for c in range(1, n + 1):
         for v in range(1, n + 1):
@@ -138,7 +138,7 @@ def build_definite_kb(n, box_h, box_w, givens):
                         rule = expr(f'{atom("Is", r1, c, v)} ==> {atom("Not", r2, c, v)}')
                         kb.tell(rule)
 
-    # Rule 5: No two cells in the same box have the same value
+    # Condition 5 (Rules): No two cells in the same box have the same value
     # Is_r1_c1_v => Not_r2​_c2​_v, where (r1,c1) and (r2,c2) are in the same box
     for box_r in range(n // box_h):
         for box_c in range(n // box_w):
@@ -154,7 +154,7 @@ def build_definite_kb(n, box_h, box_w, givens):
                             rule = expr(f'{atom("Is", r1, c1, v)} ==> {atom("Not", r2, c2, v)}')
                             kb.tell(rule)
 
-    # Rule 1: Every cell has at least one value
+    # Condition 1 (Rules): Every cell has at least one value
     # In general KB, Is_r_c_1 ∨ Is_r_c_2 ∨ ... ∨ Is_r_c_n
     # In definite clause, Not_r_c_1 ∧ Not_r_c_2 ∧ ... ∧ Not_r_c_n-1 => Is_r_c_n
     for r in range(1, n + 1):
@@ -167,7 +167,7 @@ def build_definite_kb(n, box_h, box_w, givens):
     
     return kb
 
-
+# 2.3 (b) Forward chaining on the full grid.
 def solve_full_grid_fc(n, box_h, box_w, givens):
     """Solve the whole puzzle using build_definite_kb + pl_fc_entails.
 
@@ -175,9 +175,38 @@ def solve_full_grid_fc(n, box_h, box_w, givens):
     -------
     dict[(int, int), int] -- {(row, col): value} for every cell
     """
-    raise NotImplementedError(
-        'solve_full_grid_fc: solve every cell with forward chaining'
-    )
+    kb = build_definite_kb(n, box_h, box_w, givens)
+
+    solution = {}
+
+    for r in range(1, n + 1):
+        for c in range(1, n + 1):
+
+            entailed_values = []
+
+            for v in range(1, n + 1):
+                query = atom('Is', r, c, v)
+
+                # Check whether this cell-value query is entailed by forward chaining
+                if pl_fc_entails(kb, query):
+                    entailed_values.append(v)
+
+            # No value could be established for this cell
+            if len(entailed_values) == 0:
+                raise ValueError(
+                    f'No value could be established for cell ({r}, {c}).'
+                )
+
+            # More than one value was established -> contradiction
+            if len(entailed_values) > 1:
+                raise ValueError(
+                    f'Contradiction at cell ({r}, {c}): '
+                    f'multiple values were entailed {entailed_values}.'
+                )
+
+            solution[(r, c)] = entailed_values[0]
+
+    return solution
 
 
 def pl_bc_entails(kb, query):
