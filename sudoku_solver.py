@@ -281,6 +281,35 @@ def solve_full_grid_bc(n, box_h, box_w, givens):
     -------
     dict[(int, int), int] -- {(row, col): value} for every cell
     """
-    raise NotImplementedError(
-        'solve_full_grid_bc: solve every cell with backward chaining'
-    )
+    kb = build_definite_kb(n, box_h, box_w, givens)
+    
+    solution = {}
+
+    for r in range(1, n + 1):
+        for c in range(1, n + 1):
+
+            entailed_values = []
+
+            for v in range(1, n + 1):
+                query = atom('Is', r, c, v)
+
+                # Check whether this cell-value query is entailed by backward chaining
+                if pl_bc_entails(kb, query):
+                    entailed_values.append(v)
+
+            # No value could be established for this cell
+            if len(entailed_values) == 0:
+                raise ValueError(
+                    f'No value could be established for cell ({r}, {c}).'
+                )
+
+            # More than one value was established -> contradiction
+            if len(entailed_values) > 1:
+                raise ValueError(
+                    f'Contradiction at cell ({r}, {c}): '
+                    f'multiple values were entailed {entailed_values}.'
+                )
+
+            solution[(r, c)] = entailed_values[0]
+
+    return solution
