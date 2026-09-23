@@ -173,7 +173,15 @@ def build_definite_kb(n, box_h, box_w, givens):
 # ---------------------------------------------------------------------------
 
 def _index_clauses(clauses):
-    """Index one immutable snapshot of a clause list."""
+    """Index Definite KB into following data structures, 
+    so that we can reference the c.CONCLUSION as a key to find the c.PREMISE:
+
+    facts = {Is1_1_3, ...}
+    rules_by_conclusion = {
+        Not1_1_4: [(Is1_1_3,), ...],
+        Is1_1_4: [(Not1_1_1, Not1_1_2, Not1_1_3), ...],
+    }
+    """
     facts = set()
     rules_by_conclusion = {}
 
@@ -197,22 +205,17 @@ def _index_clauses(clauses):
     return facts, rules_by_conclusion
 
 
-# Keyed on the clause tuple, never on the KB object: a KB told new clauses yields a
-# different key, so a stale index can never be handed back. utils.memoize is the
-# provided helper; maxsize bounds what is kept alive.
+# Returns the saved result if called by same clause list,
+# otherwise call _index_clauses() and save the result if the clauses are new.
 _index_memo = memoize(_index_clauses, maxsize=4)
 
 
 def build_bc_index(kb):
-    """Split a PropDefiniteKB into (facts, rules_by_conclusion), memoised.
+    """Build the search index for the large KB once and reuse it, 
+    but do not modify the original KB or the cached index.
 
-    facts               : set of atomic Exprs asserted without premises.
-    rules_by_conclusion : {conclusion: [tuple_of_premises, ...]}
-
-    pl_bc_entails is handed a KB, so without memoising it would re-index all ~24k
-    clauses on every call (0.10 s each, ~50 s over a full-grid solve). The cache
-    lives in this module, not on the KB, so the caller's object is never modified.
-    The returned index is shared between callers and must be treated as read-only.
+        facts               : set of atomic Exprs asserted without premises.
+        rules_by_conclusion : {conclusion: [tuple_of_premises, ...]}
     """
     if not isinstance(kb, PropDefiniteKB):
         raise ValueError('kb must be a PropDefiniteKB.')
@@ -224,7 +227,27 @@ def build_bc_index(kb):
 # ---------------------------------------------------------------------------
 
 def build_fc_index(kb):
-    """Return a copy of kb whose clauses_with_premise lookup is precomputed."""
+    """Return a copy of kb whose clauses_with_premise lookup is precomputed.
+    Example input KB:
+    kb.clauses = [
+        Is1_1_3,
+        Is1_1_3 ==> Not1_1_4,
+        Is1_1_3 ==> Not1_2_3,
+    ]
+
+    Example output KB (indexed_kb):
+    indexed_kb.clauses = [             # Same clauses, in a new list
+        Is1_1_3,
+        Is1_1_3 ==> Not1_1_4,
+        Is1_1_3 ==> Not1_2_3,
+    ]
+    indexed_kb.clauses_with_premise(Is1_1_3) returns:
+        [Is1_1_3 ==> Not1_1_4, Is1_1_3 ==> Not1_2_3]
+
+    The output KB has the same facts and rules, but looks up rules by premise
+    using a precomputed index instead of scanning every clause.
+    """
+    
 
     indexed_kb = PropDefiniteKB()
     indexed_kb.clauses = list(kb.clauses)
@@ -267,17 +290,17 @@ def solve_full_grid_fc(n, box_h, box_w, givens):
 
 def bc_ask(query, facts, rules_by_conclusion, proved, why=None):
 
-    while True:
-        failed = set()                              # refuted in THIS round only
-        active = set()                              # goals open on this branch
+    while True: # repeat until query is proved or more tries are useless
+        failed = set()                              # goals that could not be proved in this round (1 bc(query) search (Whole DFS))
+        active = set()                              # goals on the current DFS path that have not yet been proved
         proved_before = len(proved)
 
         def bc(q):
-            if q in facts or q in proved:            # q matches a fact
+            if q in facts or q in proved:            # q matches a fact or in proved
                 return True
-            if q in failed:                          # [added] already refuted this round
+            if q in failed:                          # already failed this round
                 return False
-            if q in active:                          # [added] loop -- cut this branch
+            if q in active:                          # cycle detected; stop this branch
                 return False
             if q not in rules_by_conclusion:         # no clause concludes q
                 failed.add(q)
@@ -288,7 +311,7 @@ def bc_ask(query, facts, rules_by_conclusion, proved, why=None):
                 count = len(premise)                 # count = number of symbols in premise
                 for p in premise:
                     if bc(p):
-                        proved.add(p)                # if p not in KB then add p to KB
+                        proved.add(p)                # record p as proved
                         count -= 1
                     else:
                         break
@@ -377,7 +400,13 @@ def step_reason(conclusion, premises, n):
 
 
 def trace_steps(goals, facts, why, n, emitted=None):
-    """Flatten the recorded proof DAG into steps ordered premises-before-conclusion."""
+    """Flatten the recorded proof DAG into steps ordered premises-before-conclusion.
+    {
+        'conclusion': 'Not1_2_3',
+        'premises': ['Is1_1_3'],
+        'reason': 'row_elimination',
+    }
+    """
     steps = []
     emitted = set() if emitted is None else emitted
 
