@@ -2,7 +2,7 @@
 
 Live app: [Group 23 - Sudoku Solver](https://it5005-group23-sudoku.streamlit.app)
 
-A shared project for Group 23. The Streamlit frontend supports puzzle selection, full-grid solver controls, targeted queries, a proof viewer, and a knowledge-base inspector. The general knowledge-base builder is implemented; the definite-KB and FC/BC solver functions are still starter stubs. The conceptual answers remain to be completed.
+A shared project for Group 23. The Streamlit frontend supports puzzle selection, full-grid solver controls, targeted queries, a proof viewer, and a knowledge-base inspector. The general and definite knowledge bases, FC/BC solvers, cell proofs, and both solve walkthroughs are implemented. This course app assumes valid supplied 9×9 puzzle inputs. The conceptual answers remain to be completed.
 
 ## Run locally
 
@@ -49,7 +49,7 @@ python -m pytest -q
 
 General-KB tests check the supplied solutions against all generated clauses, rectangular boxes, inference on a small grid, input preservation, and the app's real CNF generation.
 
-Frontend tests use Streamlit's `AppTest` with explicit backend fixtures to exercise solved grids, failed and excluded queries, single-cell proof navigation, full-solve replay with optional trace fixtures, puzzle resets, and unavailable or malformed backend responses. Fixtures stay under `tests/`; the production app does not import them or read reference solutions for inference. End-to-end integration with real deductions still needs the backend implementation.
+Frontend tests use Streamlit's `AppTest` with explicit backend fixtures to exercise solved grids, failed and excluded queries, single-cell proof navigation, full-solve replay with optional trace fixtures, puzzle resets, and unavailable or malformed backend responses. Fixtures stay under `tests/`; the production app does not import them or read reference solutions for inference. Focused integration tests check the FC walkthrough against all five supplied solutions and verify that the frontend can replay it.
 
 The app resolves `puzzles.json` relative to its own file, so it also runs when launched from another working directory. For the repository's theme settings, launch from the repository root as shown above.
 

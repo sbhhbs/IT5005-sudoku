@@ -247,7 +247,7 @@ def build_fc_index(kb):
     The output KB has the same facts and rules, but looks up rules by premise
     using a precomputed index instead of scanning every clause.
     """
-    
+
 
     indexed_kb = PropDefiniteKB()
     indexed_kb.clauses = list(kb.clauses)
@@ -465,6 +465,47 @@ def solve_full_grid_bc_with_trace(n, box_h, box_w, givens):
                 goal = atom('Is', r, c, v)
                 if bc_ask(goal, facts, rules_by_conclusion, proved, why):
                     grid[(r, c)] = v
+                    steps.extend(trace_steps([goal], facts, why, n, emitted))
+                    break
+            else:
+                raise ValueError(f'No value could be established for cell ({r}, {c}).')
+    return {'grid': grid, 'steps': steps}
+
+
+def solve_full_grid_fc_with_trace(n, box_h, box_w, givens):
+    """Add a walkthrough to the existing per-cell FC solving strategy.
+
+    Observe the supplied algorithm's premise lookups to record proven atoms
+    and the rules about to fire. Reuse the existing trace formatting helpers;
+    no BC inference or reference solution is used. Inputs are assumed valid.
+    """
+    kb = build_fc_index(build_definite_kb(n, box_h, box_w, givens))
+    lookup = kb.clauses_with_premise
+    facts = {atom('Is', r, c, v) for (r, c), v in givens.items()}
+    why = {fact: () for fact in facts}
+    processed, emitted, steps, grid = set(), set(), [], {}
+
+    def record_premise(symbol):
+        processed.add(symbol)
+        steps.extend(trace_steps([symbol], facts, why, n, emitted))
+        clauses = lookup(symbol)
+        for clause in clauses:
+            head = clause.args[1]
+            if head not in why:
+                premises = tuple(conjuncts(clause.args[0]))
+                if all(p in processed for p in premises):
+                    why[head] = premises
+        return clauses
+
+    kb.clauses_with_premise = record_premise
+    for r in range(1, n + 1):
+        for c in range(1, n + 1):
+            for v in range(1, n + 1):
+                goal = atom('Is', r, c, v)
+                processed.clear()  # The supplied FC routine starts a fresh agenda.
+                if pl_fc_entails(kb, goal):
+                    grid[(r, c)] = v
+                    # FC returns on its query before calling clauses_with_premise.
                     steps.extend(trace_steps([goal], facts, why, n, emitted))
                     break
             else:

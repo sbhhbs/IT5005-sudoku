@@ -1,9 +1,9 @@
 # Optional full-grid walkthrough extension
 
-This proposed optional interface supports Member 3's full-solve replay. It supplements the
+This optional interface supports the frontend’s full-solve replay. It supplements the
 [agreed solver/UI contract](solver-ui-contract.md); it does not change any of
-that contract's required function signatures or return types. Member 2 can
-implement it separately from the core grid-only functions.
+that contract's required function signatures or return types. Trace helpers are
+separate from the core grid-only functions.
 
 ## Helpers
 
@@ -28,8 +28,9 @@ The entire result uses Python's tuple-keyed grid format; only `steps` are direct
 JSON-compatible. Steps follow the existing trace schema and reason labels.
 
 - The trace and grid come from the **same run of the selected algorithm**.
-- Include every original fact and every successful deduction recorded during
-  that run. Each conclusion appears once and all premises appear earlier.
+- Include the original facts and successful deductions supporting the returned
+  grid. A trace may omit unrelated deductions. Each conclusion appears once and
+  all premises appear earlier.
 - Every cell in the returned grid has an `Is` step establishing it. No `Is` or
   `Not` step may contradict the returned grid.
 - FC steps must come from the supplied FC algorithm's actual run.
@@ -40,6 +41,11 @@ JSON-compatible. Steps follow the existing trace schema and reason labels.
   extension does not expose a partial walkthrough through the exception.
 - The existing `solve_full_grid_fc/bc` functions still return **only a grid**.
   Traced helpers should share their inference engine with those functions.
+
+The course integration assumes valid supplied 9×9 puzzles. FC tracing follows the
+existing per-cell candidate-query strategy and observes the supplied FC routine.
+The existing BC trace helper is retained. No extra input-validation layer
+is required for this integration.
 
 ## Frontend behavior
 
