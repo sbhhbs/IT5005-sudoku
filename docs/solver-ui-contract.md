@@ -1,28 +1,27 @@
 # Group 23: solver-to-UI interface contract
 
-**Status:** Core interface reviewed and accepted before implementation. The optional full-grid walkthrough helpers were added as a later proposal; see [the separate extension](full-grid-trace-extension.md). The extension is implemented by the integration work but remains optional for compatible backends.
+**Status:** Agreed solver/frontend data interface. Full-grid walkthroughs use the [optional trace extension](full-grid-trace-extension.md).
 
-**Scope:** Member 2 implements the definite knowledge base, inference, full-grid solvers, and trace production in `sudoku_solver.py`. Member 3 implements the Streamlit interface and renders the returned data. The general knowledge base belongs to Member 1 and keeps its existing interface.
+**Course integration scope:** Assume valid supplied 9×9 Sudoku inputs. The broader validation, 1×1, and generic-Horn trace cases below are reference expectations, not requirements for this course integration.
+
+**Scope:** `sudoku_solver.py` supplies the knowledge bases, inference, full-grid solvers, and trace data. The Streamlit frontend renders the results. The existing core function signatures remain unchanged.
 
 The starter function signatures and assignment restrictions remain authoritative. The additional trace helper and the detailed error/mutation behavior below are group integration decisions, not extra requirements quoted from the assignment.
 
-## 1. Initial handoff baseline
+## 1. Components
 
-This table records the state when the contract was proposed, not current implementation progress. The frontend and general KB have since been implemented; Member 2’s implementation and the follow-up integration changes are described in section 13.
-
-| Component | State at initial handoff | Integration responsibility |
-| --- | --- | --- |
-| `puzzles.json` | Provided; five 9×9 puzzles with 3×3 boxes | UI selects a puzzle and converts its givens to Python keys |
-| Notebook `load_pool` | Provided | Keep the assignment's loader unchanged |
-| `atom`, `Expr`, `PropKB`, `PropDefiniteKB` | Provided | Reuse these representations |
-| `pl_fc_entails` | Provided in `logic_.py` | Member 2 calls it; do not edit the library |
-| `build_general_kb` | Stub | Member 1; separate from the app's primary solver path |
-| `build_definite_kb` | Stub | Member 2 |
-| `pl_bc_entails` | Stub | Member 2 |
-| `solve_full_grid_fc`, `solve_full_grid_bc` | Stubs | Member 2 |
-| `pl_bc_entails_with_trace` | Proposed new helper; not present yet | Member 2, in coordination with Member 3 |
-| Streamlit interface | Title, imports, and TODOs | Member 3 |
-| GitHub and Streamlit deployment | Set up; updates on `main` have been verified | Member 3 integrates and checks the live app |
+| Component | Purpose |
+| --- | --- |
+| `puzzles.json` | Five supplied 9×9 puzzles with 3×3 boxes |
+| Notebook `load_pool` | Provided loader; keep unchanged |
+| `atom`, `Expr`, `PropKB`, `PropDefiniteKB` | Provided logic representations |
+| `pl_fc_entails` | Provided FC algorithm in `logic_.py`; keep unchanged |
+| `build_general_kb`, `build_definite_kb` | Construct the two knowledge representations |
+| `pl_bc_entails` | Answer targeted entailment queries |
+| `solve_full_grid_fc`, `solve_full_grid_bc` | Return a complete solved grid |
+| `pl_bc_entails_with_trace` | Return a cell verdict and its supporting proof |
+| `solve_full_grid_fc_with_trace`, `solve_full_grid_bc_with_trace` | Supply the optional full-solve walkthrough |
+| Streamlit frontend | Display puzzles, results, proofs, and KB clauses |
 
 Live app: [Group 23 - Sudoku Solver](https://it5005-group23-sudoku.streamlit.app)
 
@@ -84,7 +83,7 @@ This is an illustrative subset of clues, not a complete puzzle specification fro
 
 Reject booleans where integers are expected; Python treats `bool` as an integer subclass, but `True` is not a meaningful Sudoku coordinate or value.
 
-Member 3 converts JSON keys once when loading a puzzle:
+The frontend converts JSON keys once when loading a puzzle:
 
 ```python
 givens = {
@@ -169,7 +168,7 @@ Example message:
 The current Horn rules determined 45 of 81 cells. A complete grid could not be established without stronger reasoning.
 ```
 
-The wording and exact count are not an API for the UI to parse. Member 3 catches `ValueError` and displays its message.
+The wording and exact count are not an API for the UI to parse. The frontend catches `ValueError` and displays its message.
 
 - Do not fill unresolved cells from the reference solution.
 - Do not select an arbitrary candidate when no value is entailed.
@@ -197,7 +196,7 @@ For the generic BC interface, reject malformed non-atomic queries or a KB that i
 
 A valid targeted query can still return `True` or `False` even if the entire puzzle cannot be solved. It should not call a full-grid solver first.
 
-`NotImplementedError` is only a temporary starter condition. Member 3 may handle it while developing, but completed solver paths must not raise it.
+`NotImplementedError` is only a temporary starter condition. The frontend may handle it while developing, but completed solver paths must not raise it.
 
 ### 5.3 Caller behavior
 
@@ -213,7 +212,7 @@ else:
     show_solved_board(solved)
 ```
 
-The `show_*` names are illustrative UI actions, not functions Member 2 needs to supply. Do not turn unexpected programming exceptions into successful results or `False` entailment verdicts.
+The `show_*` names are illustrative UI actions, not required solver functions. Do not turn unexpected programming exceptions into successful results or `False` entailment verdicts.
 
 ## 6. Input mutation, KB state, and repeat calls
 
@@ -241,7 +240,7 @@ Private indexes and proof caches are allowed, provided that:
 - They are invalidated if the KB's clauses change. Per-call caches are a simpler alternative if persistent invalidation is difficult.
 - Returned trace dictionaries and lists are fresh snapshots; callers cannot corrupt cached proofs by modifying a previous result.
 
-Member 3 can build a fresh KB for each submitted cell query initially. The UI will not depend on any private attributes added to the KB.
+The frontend can build a fresh KB for each submitted cell query. The UI will not depend on any private attributes added to the KB.
 
 ### 6.3 Cycle handling
 
@@ -279,7 +278,7 @@ Required result shape:
 
 Use JSON-compatible Python values: strings, booleans, lists, and dictionaries. Do not return `Expr`, `set`, tuple-keyed maps, HTML, Streamlit objects, or exception instances inside the trace.
 
-No file serialization is required in Member 2's code. The format is JSON-compatible so that it is simple to inspect, test, and render.
+No file serialization is required in the solver. The format is JSON-compatible so that it is simple to inspect, test, and render.
 
 ### 7.1 Step object
 
@@ -299,7 +298,7 @@ This is an illustrative implication: row 1 already contains 3 at column 1, so co
 | `premises` | List of strings | Exact atoms supporting the inference, or an empty list for a fact |
 | `reason` | String | One of the values in the next table |
 
-For a non-fact step, the logical rule is fully represented by `premises ==> conclusion`. A separate human-readable sentence, rule string, or source-code location is not required. Member 3 writes the UI wording.
+For a non-fact step, the logical rule is fully represented by `premises ==> conclusion`. A separate human-readable sentence, rule string, or source-code location is not required. The frontend supplies the UI wording.
 
 ### 7.2 Reason values
 
@@ -315,7 +314,7 @@ For a non-fact step, the logical rule is fully represented by `premises ==> conc
 
 If a peer shares both a row/column and a box, choose one valid explanation. The implementation may record which rule was used or apply a consistent classification order. The UI must not depend on a particular choice among equally valid reasons.
 
-Private KB metadata may retain dimensions, original givens, and rule labels for trace production. This stays internal to Member 2's implementation; Member 3 consumes only this documented result.
+Private KB metadata may retain dimensions, original givens, and rule labels for trace production. This stays internal to the solver; the frontend consumes only this documented result.
 
 Do not infer `box_elimination` using a hard-coded 3×3 box size. Use the dimensions supplied when building the KB.
 
@@ -351,7 +350,7 @@ Required invariants:
 7. A cached proof is acceptable if its original supporting facts and rules remain valid and are included in the returned list.
 8. Different valid rule orderings may produce different proofs. Tests should validate the proof's meaning, not require one exact list unless deliberately using a fixed fixture.
 
-Member 3 will present this as “Steps supporting the answer.” The UI should not claim it is the complete chronological execution log. A future search/debug event stream would need a separate format for goals attempted, branches rejected, and cycle encounters.
+The frontend presents this as “Steps supporting the answer.” The UI should not claim it is the complete chronological execution log. A future search/debug event stream would need a separate format for goals attempted, branches rejected, and cycle encounters.
 
 ## 9. Complete trace examples
 
@@ -450,7 +449,7 @@ solved = solve_full_grid_fc(n, box_h, box_w, givens)
 elapsed_seconds = time.perf_counter() - start
 ```
 
-Time the full call, including KB construction, for both algorithms. Do not include board rendering. The app owns the displayed timing; Member 2 does not add a timing field to solver results.
+Time the full call, including KB construction, for both algorithms. Do not include board rendering. The app owns the displayed timing; the solver does not add a timing field to its results.
 
 Avoid reporting a cached whole-grid UI result's lookup time as solver runtime. Benchmarks should clearly state whether KB construction or reusable proof caches are included.
 
@@ -468,11 +467,11 @@ The traced helper must use the same core BC implementation as the required plain
 
 The UI keeps its original givens separate from any solved board. Query reasoning uses the original givens, not a previously displayed solution inserted as extra clues.
 
-Member 3 maps reason codes and symbol coordinates into sentences, highlights, and expandable cards. Member 2 returns data, not presentation markup. Do not use `eval` to decode returned symbol strings.
+The frontend maps reason codes and symbol coordinates into sentences, highlights, and expandable cards. The solver returns data, not presentation markup. Do not use `eval` to decode returned symbol strings.
 
-## 11. Development fixtures while Member 2 is implementing
+## 11. Development fixtures
 
-Member 3 can build the UI now using the real puzzle inputs and separate test fixtures for results/proofs.
+The frontend can be tested using real puzzle inputs and separate fixtures for results/proofs.
 
 - Keep fixtures in tests or an explicitly labelled development preview. They are not alternate implementations of the required solver functions.
 - The provided `solution` may be used as a test expectation or a clearly labelled reference-board preview. It must not satisfy a production solve or entailment request.
@@ -481,7 +480,7 @@ Member 3 can build the UI now using the real puzzle inputs and separate test fix
 - Full-grid solving and positive/negative verdict rendering can be developed without waiting for trace support.
 - Agree on this trace schema before connecting tutor mode. If the schema changes, update this document and both producer/consumer code together.
 
-## 12. Acceptance checklist for Member 2 and integration
+## 12. Integration checklist
 
 ### Data and full-grid behavior
 
@@ -517,40 +516,8 @@ Member 3 can build the UI now using the real puzzle inputs and separate test fix
 
 ### Handoff
 
-- [ ] Member 2 and Member 3 agree on the function name and schema before tutor integration.
-- [ ] Member 2 supplies at least one real successful proof, one direct-given proof, and one non-entailed result for integration checks.
-- [ ] Member 3 verifies the UI against both live results and expected error behavior.
+- [ ] Solver and frontend use the same function names and schemas.
+- [ ] Integration checks include a real successful proof, a direct-given proof, and a non-entailed result.
+- [ ] The frontend is checked against both live results and expected error behavior.
 
 The solver implementation can choose its indexes, search order, memoization, and private metadata. Those choices stay internal as long as the interfaces, logical meaning, and behavior above hold.
-
-
-## 13. Member 2 integration and later additions
-
-Member 2’s implementation was merged through PR #3. The follow-up integration branch adds contract validation, generic trace support, and the FC walkthrough. This section describes the resulting implementation choices; it does not prescribe private implementation details for Member 2.
-
-### Additional public APIs
-
-Only these two public helpers extend this agreement:
-
-```python
-solve_full_grid_fc_with_trace(n, box_h, box_w, givens)
-solve_full_grid_bc_with_trace(n, box_h, box_w, givens)
-# Each returns {'grid': complete_tuple_keyed_grid, 'steps': ordered_steps}.
-```
-
-They support **Follow the solve** and are specified in [the optional full-grid extension](full-grid-trace-extension.md). The frontend falls back to the existing grid-only solver if the matching helper is absent or raises `NotImplementedError`. The single-cell `pl_bc_entails_with_trace` helper was already part of the accepted core agreement in section 7.
-
-Single-cell traces contain only the supporting proof and end with the query. Full-grid traces contain the selected algorithm's successful deductions for the whole run and have no single final-query requirement. Both use the same step fields and reason labels. Neither is a search-event log. Incomplete full-grid calls still raise `ValueError`; they do not return partial grids or partial walkthroughs. No uniqueness checking or solution enumeration has been added.
-
-### Private implementation choices
-
-- The supplied `PropDefiniteKB` stores private geometry, original clues, indexes, and proof provenance. The frontend does not access those private fields. Generic facts receive `rule_application`, not `given`.
-- FC calls the unchanged supplied `pl_fc_entails` once with an absent probe atom to exhaust its agenda. The KB's premise lookup observes processed atoms and records provenance; it does not insert deductions into `kb.clauses`.
-- BC retains Member 2’s depth-first search and retry rounds: AND premises must all succeed, alternative rules form OR branches, and active-path cycles cut off only that branch. An explicit stack avoids Python recursion limits. A failed round is retried after new proofs; failed goals are cached across queries only after the full search settles. Clause changes invalidate indexes and proof caches.
-- Full-grid BC queries every cell/value, so it does not hide conflicting conclusions by accepting the first successful value.
-
-Member 2 can use different private indexes or proof-search strategies while preserving the public behavior. Notebook performance comparisons should explain that this FC implementation exhausts its agenda once, while BC reuses proof tables within a full-grid solve. UI timings include KB construction and, when the optional helper is used, trace recording; they are not inference-only benchmarks.
-
-### Verification scope
-
-`tests/test_definite_solver.py` checks both solvers against all five supplied solutions, positive and negative BC candidates, proof validity, generic Horn cycles, cache invalidation, fresh return objects, input preservation, invalid/incomplete inputs, rectangular boxes, and real frontend integration. It also checks the optional full-grid traces separately. Passing these checks is integration evidence, not a substitute for Member 2's review or the notebook's assignment answers. The checklist above remains available for the final handoff review.

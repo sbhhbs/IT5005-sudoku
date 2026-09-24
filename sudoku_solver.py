@@ -83,52 +83,6 @@ def build_general_kb(n, box_h, box_w, givens):
 
     return kb
 
-def _validate_sudoku_inputs(n, box_h, box_w, givens):
-    """Reject malformed or directly conflicting clues without mutating them."""
-    if any(type(x) is not int or x <= 0 for x in (n, box_h, box_w)) or box_h * box_w != n:
-        raise ValueError('Dimensions must be positive integers with box_h * box_w == n.')
-    if not isinstance(givens, dict):
-        raise ValueError('Givens must be a dictionary mapping (row, column) to value.')
-    rows, columns, boxes = set(), set(), set()
-    for cell, value in givens.items():
-        if (not isinstance(cell, tuple) or len(cell) != 2
-                or any(type(x) is not int or not 1 <= x <= n for x in cell)
-                or type(value) is not int or not 1 <= value <= n):
-            raise ValueError('Every given needs integer coordinates and a value in 1..n; booleans are not allowed.')
-        r, c = cell
-        row, column, box = (r, value), (c, value), ((r - 1) // box_h, (c - 1) // box_w, value)
-        if row in rows or column in columns or box in boxes:
-            raise ValueError('Contradictory givens repeat a value in a row, column, or box.')
-        rows.add(row)
-        columns.add(column)
-        boxes.add(box)
-
-
-def _is_atomic_proposition(value):
-    return isinstance(value, Expr) and not value.args and is_prop_symbol(value.op)
-
-
-def _parse_horn_clause(clause):
-    """Validate before calling helpers that assume a well-formed clause."""
-    if _is_atomic_proposition(clause):
-        return (), clause
-    if not isinstance(clause, Expr) or clause.op != '==>' or len(clause.args) != 2:
-        raise ValueError('The KB contains a non-propositional or non-definite clause.')
-    antecedent, head = clause.args
-    premises, pending = [], [antecedent]
-    while pending:
-        item = pending.pop()
-        if isinstance(item, Expr) and item.op == '&' and item.args:
-            pending.extend(reversed(item.args))
-        elif _is_atomic_proposition(item):
-            premises.append(item)
-        else:
-            raise ValueError('Every Horn premise must be a positive atomic proposition.')
-    if not premises or not _is_atomic_proposition(head):
-        raise ValueError('Every Horn rule must conclude a positive atomic proposition.')
-    return tuple(dict.fromkeys(premises)), head
-
-
 # 2.2.2. Build KB
 def build_definite_kb(n, box_h, box_w, givens):
     """Return a PropDefiniteKB encoding this n x n Sudoku's constraints plus
@@ -143,10 +97,7 @@ def build_definite_kb(n, box_h, box_w, givens):
     -------
     PropDefiniteKB
     """
-    _validate_sudoku_inputs(n, box_h, box_w, givens)
     kb = PropDefiniteKB()
-    # Private geometry and original clues distinguish facts from later deductions.
-    kb._sudoku_context = (n, box_h, box_w, dict(givens))
 
     # Condition 6 (Facts): givens directly imply Is_r_c_v
     # Is_r_c_v
@@ -211,8 +162,7 @@ def build_definite_kb(n, box_h, box_w, givens):
             for v in range(1, n + 1):
                 other_values = [atom('Not', r, c, w) for w in range(1, n + 1) if w != v]
                 antecedent = associate('&', other_values)
-                # A 1x1 grid has one forced value and no elimination premises.
-                rule = Expr('==>', antecedent, atom('Is', r, c, v)) if other_values else atom('Is', r, c, v)
+                rule = Expr('==>', antecedent, atom('Is', r, c, v))
                 kb.tell(rule)
     
     return kb
@@ -236,7 +186,7 @@ def _index_clauses(clauses):
     rules_by_conclusion = {}
 
     for clause in clauses:
-        premises, conclusion = _parse_horn_clause(clause)
+        premises, conclusion = parse_definite_clause(clause)
         if premises:
             rules_by_conclusion.setdefault(conclusion, []).append(tuple(premises))
         else:
@@ -269,14 +219,7 @@ def build_bc_index(kb):
     """
     if not isinstance(kb, PropDefiniteKB):
         raise ValueError('kb must be a PropDefiniteKB.')
-    signature = tuple(kb.clauses)
-    cached = getattr(kb, '_bc_index_cache', None)
-    if cached is None or cached[0] != signature:
-        for clause in signature:
-            _parse_horn_clause(clause)
-        cached = (signature, _index_memo(signature))
-        kb._bc_index_cache = cached
-    return cached[1]
+    return _index_memo(tuple(kb.clauses))
 
 
 # ---------------------------------------------------------------------------
@@ -284,99 +227,61 @@ def build_bc_index(kb):
 # ---------------------------------------------------------------------------
 
 def build_fc_index(kb):
-    """Copy a definite KB with a premise index; leave its logical clauses intact.
+    """Return a copy of kb whose clauses_with_premise lookup is precomputed.
+    Example input KB:
+    kb.clauses = [
+        Is1_1_3,
+        Is1_1_3 ==> Not1_1_4,
+        Is1_1_3 ==> Not1_2_3,
+    ]
 
-    Duplicate clauses and repeated premises are normalized in this private copy
-    so the supplied FC counter processes each logical premise exactly once.
+    Example output KB (indexed_kb):
+    indexed_kb.clauses = [             # Same clauses, in a new list
+        Is1_1_3,
+        Is1_1_3 ==> Not1_1_4,
+        Is1_1_3 ==> Not1_2_3,
+    ]
+    indexed_kb.clauses_with_premise(Is1_1_3) returns:
+        [Is1_1_3 ==> Not1_1_4, Is1_1_3 ==> Not1_2_3]
+
+    The output KB has the same facts and rules, but looks up rules by premise
+    using a precomputed index instead of scanning every clause.
     """
-    build_bc_index(kb)  # Validate the public input before using library helpers.
+
+
     indexed_kb = PropDefiniteKB()
-    normalized = {}
+    indexed_kb.clauses = list(kb.clauses)
+
     premise_index = {}
-    for clause in kb.clauses:
-        premises, head = _parse_horn_clause(clause)
-        rule = Expr('==>', associate('&', premises), head) if premises else head
-        normalized.setdefault(rule, premises)
-    indexed_kb.clauses = list(normalized)
-    for clause, premises in normalized.items():
-        for premise in premises:
-            premise_index.setdefault(premise, []).append(clause)
+    for clause in indexed_kb.clauses:
+        if clause.op == '==>':
+            for p in conjuncts(clause.args[0]):
+                premise_index.setdefault(p, []).append(clause)
+
     indexed_kb.clauses_with_premise = lambda p: premise_index.get(p, [])
     return indexed_kb
 
 
-def _check_sudoku_contradictions(kb, symbols):
-    """Check encountered Is/Not conflicts only for a KB with Sudoku metadata."""
-    if not hasattr(kb, '_sudoku_context'):
-        return
-    positives, negatives = {}, set()
-    for symbol in symbols:
-        try:
-            prefix, r, c, v = decode_atom(symbol)
-        except ValueError:
-            continue
-        if prefix == 'Not':
-            negatives.add((r, c, v))
-        else:
-            if (r, c) in positives and positives[r, c] != v:
-                raise ValueError(f'Contradictory conclusions assign multiple values to cell ({r}, {c}).')
-            positives[r, c] = v
-    for (r, c), v in positives.items():
-        if (r, c, v) in negatives:
-            raise ValueError(f'Contradictory conclusions: cell ({r}, {c}) is both {v} and not {v}.')
+def solve_full_grid_fc(n, box_h, box_w, givens):
+    """Solve the whole puzzle using build_definite_kb + pl_fc_entails.
 
-
-def _complete_grid(kb, known, n, box_h, box_w, givens):
-    """Return a fresh complete grid or an error, never partial or guessed values."""
-    _check_sudoku_contradictions(kb, known)
-    grid = {}
-    for symbol in known:
-        prefix, r, c, v = decode_atom(symbol)
-        if prefix == 'Is':
-            grid[r, c] = v
-    if len(grid) != n * n:
-        raise ValueError(f'The current Horn rules determined {len(grid)} of {n*n} cells. '
-                         'A complete grid could not be established without stronger reasoning.')
-    _validate_sudoku_inputs(n, box_h, box_w, grid)
-    if any(grid[cell] != value for cell, value in givens.items()):
-        raise ValueError('The inferred grid changed an original given.')
-    return grid
-
-
-def _solve_fc(n, box_h, box_w, givens, with_trace=False):
-    """Observe one complete run of the unchanged supplied FC algorithm.
-
-    The absent probe exhausts the agenda. Its premise-lookup callback records
-    processed atoms and the rules about to fire, without a second inference
-    engine or a BC reconstruction. Plain and traced solving use this same run.
+    Returns
+    -------
+    dict[(int, int), int] -- {(row, col): value} for every cell
     """
     kb = build_definite_kb(n, box_h, box_w, givens)
     fc_kb = build_fc_index(kb)
-    lookup = fc_kb.clauses_with_premise
-    known, why, steps = set(), {}, []
 
-    def observed_lookup(symbol):
-        known.add(symbol)
-        if with_trace:
-            premises = why.get(symbol, ())
-            steps.append(_proof_step(symbol, premises, kb))
-        clauses = lookup(symbol)
-        if with_trace:
-            for clause in clauses:
-                premises = tuple(conjuncts(clause.args[0]))
-                if all(p in known for p in premises):
-                    why.setdefault(clause.args[1], premises)
-        return clauses
-
-    fc_kb.clauses_with_premise = observed_lookup
-    pl_fc_entails(fc_kb, Expr('SudokuCompletionProbe'))
-    grid = _complete_grid(kb, known, n, box_h, box_w, givens)
-    return {'grid': grid, 'steps': steps} if with_trace else grid
-
-
-def solve_full_grid_fc(n, box_h, box_w, givens):
-    """Solve using the supplied FC algorithm; return only a complete grid."""
-    return _solve_fc(n, box_h, box_w, givens)
+    solution = {}
+    for r in range(1, n + 1):
+        for c in range(1, n + 1):
+            for v in range(1, n + 1):
+                if pl_fc_entails(fc_kb, atom('Is', r, c, v)):
+                    solution[(r, c)] = v
+                    break
+            else:
+                raise ValueError(f'No value could be established for cell ({r}, {c}).')
+    return solution
 
 
 # ---------------------------------------------------------------------------
@@ -384,106 +289,82 @@ def solve_full_grid_fc(n, box_h, box_w, givens):
 # ---------------------------------------------------------------------------
 
 def bc_ask(query, facts, rules_by_conclusion, proved, why=None):
-    """Member 2's DFS with retry rounds, using an explicit stack for deep proofs.
 
-    Alternatives are OR branches; each rule's premises are an AND branch. Cycle
-    cutoffs are local to one round. Retry after new proofs, because a grounded
-    alternative can make a previously blocked cyclic branch succeed.
-    """
-    while True:
-        failed, active = set(), set()
+    while True: # repeat until query is proved or more tries are useless
+        failed = set()                              # goals that could not be proved in this round (1 bc(query) search (Whole DFS))
+        active = set()                              # goals on the current DFS path that have not yet been proved
         proved_before = len(proved)
-        # Frame: goal, alternative-rule index, next-premise index.
-        stack = [[query, 0, 0]]
-        while stack:
-            q, rule_index, premise_index = stack[-1]
-            if q in facts or q in proved:
-                stack.pop()
-                continue
-            alternatives = rules_by_conclusion.get(q, ())
-            if rule_index >= len(alternatives):
-                active.discard(q)
+
+        def bc(q):
+            if q in facts or q in proved:            # q matches a fact or in proved
+                return True
+            if q in failed:                          # already failed this round
+                return False
+            if q in active:                          # cycle detected; stop this branch
+                return False
+            if q not in rules_by_conclusion:         # no clause concludes q
                 failed.add(q)
-                stack.pop()
-                continue
+                return False
+
             active.add(q)
-            premises = alternatives[rule_index]
-            if premise_index == len(premises):
-                active.remove(q)
-                proved.add(q)
-                if why is not None:
-                    why.setdefault(q, premises)
-                stack.pop()
-                continue
-            p = premises[premise_index]
-            if p in facts or p in proved:
-                proved.add(p)
-                stack[-1][2] += 1
-            elif p in failed or p in active:
-                stack[-1][1] += 1
-                stack[-1][2] = 0
-            else:
-                stack.append([p, 0, 0])
-        if query in facts or query in proved:
-            return True
-        if len(proved) == proved_before:
+            for premise in rules_by_conclusion[q]:   # for each clause concluding q
+                count = len(premise)                 # count = number of symbols in premise
+                for p in premise:
+                    if bc(p):
+                        proved.add(p)                # record p as proved
+                        count -= 1
+                    else:
+                        break
+                if count == 0:                       # every premise proved
+                    active.discard(q)
+                    proved.add(q)
+                    if why is not None and q not in why:
+                        why[q] = premise
+                    return True
+            active.discard(q)
+            failed.add(q)
             return False
 
-
-def _run_bc(kb, query):
-    """Shared plain/traced BC engine, with per-KB provenance and safe invalidation."""
-    if not _is_atomic_proposition(query):
-        raise ValueError('query must be an atomic propositional Expr.')
-    facts, rules = build_bc_index(kb)
-    signature = tuple(kb.clauses)
-    state = getattr(kb, '_bc_state', None)
-    if state is None or state['signature'] != signature:
-        _check_sudoku_contradictions(kb, facts)
-        state = {'signature': signature, 'proved': set(), 'why': {}, 'failed': set(), 'checked': 0}
-        kb._bc_state = state
-    proved, why = state['proved'], state['why']
-    entailed = False if query in state['failed'] else bc_ask(query, facts, rules, proved, why)
-    if len(proved) != state['checked']:
-        _check_sudoku_contradictions(kb, facts | proved)
-        state['checked'] = len(proved)
-    if not entailed:
-        # bc_ask exhausted every retry round, not merely one cyclic branch.
-        state['failed'].add(query)
-    return entailed, facts, why
-
+        if bc(query):
+            return True
+        if len(proved) == proved_before:             # fixpoint: query not entailed
+            return False
 
 def pl_bc_entails(kb, query):
-    """Return a built-in Boolean without changing the KB's logical clauses."""
-    return _run_bc(kb, query)[0]
+    """Return True iff the PropDefiniteKB `kb` entails the atomic Expr `query`."""
+
+    if not isinstance(kb, PropDefiniteKB):
+        raise ValueError('kb must be a PropDefiniteKB.')
+    if not isinstance(query, Expr) or query.args:
+        raise ValueError('query must be an atomic Expr.')
+
+    facts, rules_by_conclusion = build_bc_index(kb)
+    return bc_ask(query, facts, rules_by_conclusion, proved=set())
 
 
 # ---------------------------------------------------------------------------
 # 2.3 (d) Backward chaining on the full grid
 # ---------------------------------------------------------------------------
 
-def _solve_bc(n, box_h, box_w, givens, with_trace=False):
-    """Use the same BC engine and proof reuse for plain and traced solves."""
+def solve_full_grid_bc(n, box_h, box_w, givens):
+    """Solve the whole puzzle with build_definite_kb + our own backward chaining.
+
+    Returns
+    -------
+    dict[(int, int), int] -- {(row, col): value} for every cell
+    """
     kb = build_definite_kb(n, box_h, box_w, givens)
+
+    solution = {}
     for r in range(1, n + 1):
         for c in range(1, n + 1):
-            # Check all candidates so a second conflicting value is not hidden.
             for v in range(1, n + 1):
-                pl_bc_entails(kb, atom('Is', r, c, v))
-    facts, _ = build_bc_index(kb)
-    state = kb._bc_state
-    grid = _complete_grid(kb, facts | state['proved'], n, box_h, box_w, givens)
-    if not with_trace:
-        return grid
-    # Original facts first, then every successful deduction in discovery order.
-    # Unlike a single-query proof, retain deductions from unsuccessful searches.
-    steps = [_proof_step(fact, (), kb) for fact in sorted(facts, key=str)]
-    steps.extend(_proof_step(head, premises, kb) for head, premises in state['why'].items())
-    return {'grid': grid, 'steps': steps}
-
-
-def solve_full_grid_bc(n, box_h, box_w, givens):
-    """Solve with the group's BC implementation; return only a complete grid."""
-    return _solve_bc(n, box_h, box_w, givens)
+                if pl_bc_entails(kb, atom('Is', r, c, v)):
+                    solution[(r, c)] = v
+                    break
+            else:
+                raise ValueError(f'No value could be established for cell ({r}, {c}).')
+    return solution
 
 
 # ---------------------------------------------------------------------------
@@ -491,63 +372,46 @@ def solve_full_grid_bc(n, box_h, box_w, givens):
 # ---------------------------------------------------------------------------
 
 def decode_atom(a):
-    """Parse a Sudoku atom; generic Horn symbols are handled separately."""
+    """'Is3_2_4' -> ('Is', 3, 2, 4). Only utils/logic_ are imported, so parse by hand."""
     name = str(a)
-    if name.startswith('Is'):
-        prefix = 'Is'
-    elif name.startswith('Not'):
-        prefix = 'Not'
-    else:
-        raise ValueError('Not a Sudoku atom.')
+    prefix = 'Is' if name.startswith('Is') else 'Not'
     r, c, v = name[len(prefix):].split('_')
     return prefix, int(r), int(c), int(v)
 
 
-def step_reason(conclusion, premises, kb):
-    """Classify actual Sudoku rules; generic facts/rules use rule_application."""
-    context = getattr(kb, '_sudoku_context', None)
-    if context is None:
-        return 'rule_application'
-    n, box_h, box_w, givens = context
-    try:
-        prefix, r, c, v = decode_atom(conclusion)
-        decoded = [decode_atom(p) for p in premises]
-    except ValueError:
-        return 'rule_application'
+def step_reason(conclusion, premises, n):
+    """Name the Sudoku rule that licensed this step, for human-readable output."""
     if not premises:
-        if prefix == 'Is' and givens.get((r, c)) == v:
-            return 'given'
-        if n == 1 and (prefix, r, c, v) == ('Is', 1, 1, 1):
-            return 'last_candidate'
-        return 'rule_application'
-    if (prefix == 'Is' and len(premises) == n - 1
-            and set(decoded) == {('Not', r, c, other) for other in range(1, n + 1) if other != v}):
+        return 'given'
+    prefix, r, c, v = decode_atom(conclusion)
+    if prefix == 'Is' and len(premises) == n - 1:
         return 'last_candidate'
-    if prefix == 'Not' and len(decoded) == 1:
-        source_prefix, sr, sc, sv = decoded[0]
+    if prefix == 'Not' and len(premises) == 1:
+        source_prefix, sr, sc, sv = decode_atom(premises[0])
         if source_prefix == 'Is':
-            if (sr, sc) == (r, c) and sv != v:
+            if (sr, sc) == (r, c):
                 return 'cell_elimination'
-            if sv == v and (sr, sc) != (r, c):
-                if sr == r:
-                    return 'row_elimination'
-                if sc == c:
-                    return 'column_elimination'
-                if (sr - 1) // box_h == (r - 1) // box_h and (sc - 1) // box_w == (c - 1) // box_w:
-                    return 'box_elimination'
+            if sr == r:
+                return 'row_elimination'
+            if sc == c:
+                return 'column_elimination'
+            return 'box_elimination'
     return 'rule_application'
 
 
-def _proof_step(conclusion, premises, kb):
-    return {'conclusion': str(conclusion), 'premises': [str(p) for p in premises],
-            'reason': step_reason(conclusion, premises, kb)}
-
-
-def trace_steps(goals, facts, why, kb, emitted=None):
-    """Flatten only supporting evidence, with premises before conclusions."""
+def trace_steps(goals, facts, why, n, emitted=None):
+    """Flatten the recorded proof DAG into steps ordered premises-before-conclusion.
+    {
+        'conclusion': 'Not1_2_3',
+        'premises': ['Is1_1_3'],
+        'reason': 'row_elimination',
+    }
+    """
     steps = []
     emitted = set() if emitted is None else emitted
+
     for goal in goals:
+        # Iterative post-order walk, so deep proofs cannot hit the recursion limit.
         stack = [(goal, False)]
         while stack:
             node, expanded = stack.pop()
@@ -556,25 +420,94 @@ def trace_steps(goals, facts, why, kb, emitted=None):
             premises = why.get(node, ())
             if not expanded and premises:
                 stack.append((node, True))
-                stack.extend((p, False) for p in reversed(premises) if p not in emitted)
+                for p in reversed(premises):
+                    if p not in emitted:
+                        stack.append((p, False))
+                continue
+            if node in emitted:
                 continue
             emitted.add(node)
-            steps.append(_proof_step(node, premises, kb))
+            steps.append({'conclusion': str(node),
+                          'premises': [str(p) for p in premises],
+                          'reason': step_reason(node, premises, n)})
     return steps
 
 
 def pl_bc_entails_with_trace(kb, query):
-    """Return a fresh supporting proof, or an empty list for an unproved goal."""
-    entailed, facts, why = _run_bc(kb, query)
-    steps = trace_steps([query], facts, why, kb) if entailed else []
+    """Optional helper used by the app's tutor view.
+
+    Returns {'query': str, 'entailed': bool, 'steps': [...]}, where each step is
+    {'conclusion', 'premises', 'reason'} and every premise appears as the
+    conclusion of an earlier step. An unproved query returns no steps.
+    """
+    if not isinstance(kb, PropDefiniteKB):
+        raise ValueError('kb must be a PropDefiniteKB.')
+    if not isinstance(query, Expr) or query.args:
+        raise ValueError('query must be an atomic Expr.')
+
+    facts, rules_by_conclusion = build_bc_index(kb)
+    n = max(decode_atom(a)[3] for a in rules_by_conclusion) if rules_by_conclusion else 0
+    why = {}
+    entailed = bc_ask(query, facts, rules_by_conclusion, set(), why)
+    steps = trace_steps([query], facts, why, n) if entailed else []
     return {'query': str(query), 'entailed': entailed, 'steps': steps}
 
 
-def solve_full_grid_fc_with_trace(n, box_h, box_w, givens):
-    """Return a complete grid and steps observed during the supplied FC run."""
-    return _solve_fc(n, box_h, box_w, givens, with_trace=True)
-
-
 def solve_full_grid_bc_with_trace(n, box_h, box_w, givens):
-    """Return a complete grid and successful deductions from the same BC run."""
-    return _solve_bc(n, box_h, box_w, givens, with_trace=True)
+    """Optional helper: solve the grid and return the deductions actually used."""
+    kb = build_definite_kb(n, box_h, box_w, givens)
+    facts, rules_by_conclusion = build_bc_index(kb)
+
+    grid, why, proved, emitted, steps = {}, {}, set(), set(), []
+    for r in range(1, n + 1):
+        for c in range(1, n + 1):
+            for v in range(1, n + 1):
+                goal = atom('Is', r, c, v)
+                if bc_ask(goal, facts, rules_by_conclusion, proved, why):
+                    grid[(r, c)] = v
+                    steps.extend(trace_steps([goal], facts, why, n, emitted))
+                    break
+            else:
+                raise ValueError(f'No value could be established for cell ({r}, {c}).')
+    return {'grid': grid, 'steps': steps}
+
+
+def solve_full_grid_fc_with_trace(n, box_h, box_w, givens):
+    """Add a walkthrough to the existing per-cell FC solving strategy.
+
+    Observe the supplied algorithm's premise lookups to record proven atoms
+    and the rules about to fire. Reuse the existing trace formatting helpers;
+    no BC inference or reference solution is used. Inputs are assumed valid.
+    """
+    kb = build_fc_index(build_definite_kb(n, box_h, box_w, givens))
+    lookup = kb.clauses_with_premise
+    facts = {atom('Is', r, c, v) for (r, c), v in givens.items()}
+    why = {fact: () for fact in facts}
+    processed, emitted, steps, grid = set(), set(), [], {}
+
+    def record_premise(symbol):
+        processed.add(symbol)
+        steps.extend(trace_steps([symbol], facts, why, n, emitted))
+        clauses = lookup(symbol)
+        for clause in clauses:
+            head = clause.args[1]
+            if head not in why:
+                premises = tuple(conjuncts(clause.args[0]))
+                if all(p in processed for p in premises):
+                    why[head] = premises
+        return clauses
+
+    kb.clauses_with_premise = record_premise
+    for r in range(1, n + 1):
+        for c in range(1, n + 1):
+            for v in range(1, n + 1):
+                goal = atom('Is', r, c, v)
+                processed.clear()  # The supplied FC routine starts a fresh agenda.
+                if pl_fc_entails(kb, goal):
+                    grid[(r, c)] = v
+                    # FC returns on its query before calling clauses_with_premise.
+                    steps.extend(trace_steps([goal], facts, why, n, emitted))
+                    break
+            else:
+                raise ValueError(f'No value could be established for cell ({r}, {c}).')
+    return {'grid': grid, 'steps': steps}

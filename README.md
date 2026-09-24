@@ -2,7 +2,7 @@
 
 Live app: [Group 23 - Sudoku Solver](https://it5005-group23-sudoku.streamlit.app)
 
-A shared project for Group 23. The Streamlit frontend supports puzzle selection, full-grid solver controls, targeted queries, a proof viewer, and a knowledge-base inspector. The general and definite knowledge bases, FC/BC solvers, single-cell proofs, and both solve walkthroughs are implemented. The conceptual answers remain to be completed.
+A shared project for Group 23. The Streamlit frontend supports puzzle selection, full-grid solver controls, targeted queries, a proof viewer, and a knowledge-base inspector. The general and definite knowledge bases, FC/BC solvers, cell proofs, and both solve walkthroughs are implemented. This course app assumes valid supplied 9×9 puzzle inputs. The conceptual answers remain to be completed.
 
 ## Run locally
 
@@ -16,7 +16,7 @@ pip install -r requirements.txt
 streamlit run sudoku_app.py
 ```
 
-The app loads all five puzzles and shows their original clues on a full-width board above three tabs: **Solve the grid** (solver and walkthrough), **Ask about cell** (query and proof), and **Knowledge base explore** (clauses and filters). Puzzle selection and Reset stay above the tabs. Click any board cell to highlight it and set the row/column in **Ask about one cell**; clicking a filled cell also copies its value. Editing the query coordinates updates the same selection. Selecting a different cell clears the previous query result without running inference. **Reset** or changing puzzles clears the selection and highlight; KB cell focus stays disabled until a cell is selected again. Solve and query actions use the real backend; reference solutions are never used as a fallback. Invalid or contradictory inputs and incomplete solves produce explanatory errors.
+The app loads all five puzzles and shows their original clues on a full-width board above three tabs: **Solve the grid** (solver and walkthrough), **Ask about cell** (query and proof), and **Knowledge base explore** (clauses and filters). Puzzle selection and Reset stay above the tabs. Click any board cell to highlight it and set the row/column in **Ask about one cell**; clicking a filled cell also copies its value. Editing the query coordinates updates the same selection. Selecting a different cell clears the previous query result without running inference. **Reset** or changing puzzles clears the selection and highlight; KB cell focus stays disabled until a cell is selected again. Solve and query actions display a clear unavailable message while the corresponding backend function raises `NotImplementedError`. They connect to the real solver as its implementation arrives; reference solutions are never used as a fallback.
 
 After **Solve puzzle**, **Follow the solve** replays the selected algorithm's actual successful deductions. Start at the original clues, use Previous/Next or the slider, and switch between **Cell placements** and **All deductions**. The replay board is reconstructed from the trace prefix, not copied from the final solution. Full-grid traces use [optional extension helpers](docs/full-grid-trace-extension.md), preserving the original grid-only APIs. Without those helpers, solving still works and the app reports that no walkthrough is available.
 
@@ -39,7 +39,7 @@ pip install -r requirements-dev.txt
 jupyter lab Sudoku_Assignment.ipynb
 ```
 
-## Verification
+## Frontend verification
 
 After installing `requirements-dev.txt`, run:
 
@@ -49,17 +49,9 @@ python -m pytest -q
 
 General-KB tests check the supplied solutions against all generated clauses, rectangular boxes, inference on a small grid, input preservation, and the app's real CNF generation.
 
-Frontend tests use Streamlit's `AppTest` with explicit backend fixtures to exercise solved grids, failed and excluded queries, single-cell proof navigation, full-solve replay with optional trace fixtures, puzzle resets, and unavailable or malformed backend responses. Fixtures stay under `tests/`; the production app does not import them or read reference solutions for inference. Backend and integration tests also exercise all five supplied puzzles, both algorithms and walkthroughs, proof validity, generic Horn KBs, cycles, cache invalidation, input preservation, invalid inputs, incomplete grids, and rectangular boxes.
+Frontend tests use Streamlit's `AppTest` with explicit backend fixtures to exercise solved grids, failed and excluded queries, single-cell proof navigation, full-solve replay with optional trace fixtures, puzzle resets, and unavailable or malformed backend responses. Fixtures stay under `tests/`; the production app does not import them or read reference solutions for inference. Focused integration tests check the FC walkthrough against all five supplied solutions and verify that the frontend can replay it.
 
 The app resolves `puzzles.json` relative to its own file, so it also runs when launched from another working directory. For the repository's theme settings, launch from the repository root as shown above.
-
-## Inference and walkthrough timing
-
-Member 2's definite-clause encoding and backward-search approach are integrated. The follow-up fixes validate inputs/results, support generic Horn proofs and 1×1 puzzles, and add an FC walkthrough using the unchanged supplied `pl_fc_entails`. BC uses an explicit DFS stack with retry rounds for cyclic dependencies; plain and traced calls share proof provenance and invalidate caches when clauses change.
-
-Both FC APIs exhaust one supplied FC run, using an absent probe query and observing its premise lookups. Both BC APIs reuse proved subgoals while checking cell/value candidates. A full solve trace records successful deductions from that run, including supporting facts; a single-cell trace includes only its supporting proof. Neither is a log of failed search branches. The core functions still return only the grid.
-
-The app times KB construction and inference, including trace recording when enabled. Notebook benchmarks use the plain solver APIs; trace recording adds overhead but does not change the solving strategy. Results saved before these follow-up changes must be regenerated before comparing runtimes.
 
 ## Deploy on Streamlit Community Cloud
 
@@ -75,7 +67,7 @@ Alternatively, paste this file URL into the deployment form:
 
 https://github.com/sbhhbs/IT5005-sudoku/blob/main/sudoku_app.py
 
-The app is deployed at the URL above, which is also recorded in the notebook. Streamlit tracks `main`; pushes and merged pull requests to that branch should update the app automatically.
+The starter is deployed at the URL above, which is also recorded in the notebook. Streamlit tracks `main`; pushes and merged pull requests to that branch should update the app automatically.
 
 ## Git collaboration
 
