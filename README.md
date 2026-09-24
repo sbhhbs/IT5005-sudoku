@@ -20,6 +20,8 @@ The app loads all five puzzles and shows their original clues on a full-width bo
 
 After **Solve puzzle**, **Follow the solve** replays the selected algorithm's actual successful deductions. Start at the original clues, use Previous/Next or the slider, and switch between **Cell placements** and **All deductions**. The replay board is reconstructed from the trace prefix, not copied from the final solution. Full-grid traces use [optional extension helpers](docs/full-grid-trace-extension.md), preserving the original grid-only APIs. Without those helpers, solving still works and the app reports that no walkthrough is available.
 
+Both FC APIs use one complete pass of the supplied forward-chaining routine instead of restarting inference for every candidate. The walkthrough records deductions from that same pass. Rerun the notebook timing cells when comparing this version with earlier saved results.
+
 These solvers never choose arbitrarily between multiple solutions. They report an incomplete grid if the Horn rules cannot finish; that alone does not distinguish ambiguity from a unique puzzle needing stronger rules.
 
 The optional `pl_bc_entails_with_trace` helper enables the single-cell tutor view. If only plain backward chaining is ready, the app can display its verdict without a trace. A failed query is described as unproved unless a separate `Not` query establishes that the value is ruled out. See [the solver/UI contract](docs/solver-ui-contract.md) for the agreed formats.
