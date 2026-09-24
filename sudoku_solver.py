@@ -263,25 +263,8 @@ def build_fc_index(kb):
 
 
 def solve_full_grid_fc(n, box_h, box_w, givens):
-    """Solve the whole puzzle using build_definite_kb + pl_fc_entails.
-
-    Returns
-    -------
-    dict[(int, int), int] -- {(row, col): value} for every cell
-    """
-    kb = build_definite_kb(n, box_h, box_w, givens)
-    fc_kb = build_fc_index(kb)
-
-    solution = {}
-    for r in range(1, n + 1):
-        for c in range(1, n + 1):
-            for v in range(1, n + 1):
-                if pl_fc_entails(fc_kb, atom('Is', r, c, v)):
-                    solution[(r, c)] = v
-                    break
-            else:
-                raise ValueError(f'No value could be established for cell ({r}, {c}).')
-    return solution
+    """Solve the whole grid with one pass of the supplied FC algorithm."""
+    return _solve_full_grid_fc(n, box_h, box_w, givens)
 
 
 # ---------------------------------------------------------------------------
@@ -472,42 +455,47 @@ def solve_full_grid_bc_with_trace(n, box_h, box_w, givens):
     return {'grid': grid, 'steps': steps}
 
 
-def solve_full_grid_fc_with_trace(n, box_h, box_w, givens):
-    """Add a walkthrough to the existing per-cell FC solving strategy.
+def _solve_full_grid_fc(n, box_h, box_w, givens, with_trace=False):
+    """Collect the full FC closure, optionally recording a walkthrough.
 
-    Observe the supplied algorithm's premise lookups to record proven atoms
-    and the rules about to fire. Reuse the existing trace formatting helpers;
-    no BC inference or reference solution is used. Inputs are assumed valid.
+    An absent probe query makes the unchanged supplied FC routine exhaust its
+    agenda once. Its premise lookup exposes each processed atom and the rules
+    about to fire. Inputs are assumed to be valid course puzzles.
     """
     kb = build_fc_index(build_definite_kb(n, box_h, box_w, givens))
     lookup = kb.clauses_with_premise
     facts = {atom('Is', r, c, v) for (r, c), v in givens.items()}
     why = {fact: () for fact in facts}
-    processed, emitted, steps, grid = set(), set(), [], {}
+    processed, emitted, steps = set(), set(), []
 
     def record_premise(symbol):
         processed.add(symbol)
-        steps.extend(trace_steps([symbol], facts, why, n, emitted))
         clauses = lookup(symbol)
-        for clause in clauses:
-            head = clause.args[1]
-            if head not in why:
-                premises = tuple(conjuncts(clause.args[0]))
-                if all(p in processed for p in premises):
-                    why[head] = premises
+        if with_trace:
+            steps.extend(trace_steps([symbol], facts, why, n, emitted))
+            for clause in clauses:
+                head = clause.args[1]
+                if head not in why:
+                    premises = tuple(conjuncts(clause.args[0]))
+                    if all(p in processed for p in premises):
+                        why[head] = premises
         return clauses
 
     kb.clauses_with_premise = record_premise
+    # This symbol cannot occur in the generated Is/Not Sudoku vocabulary.
+    pl_fc_entails(kb, expr('SudokuCompletionProbe'))
+    grid = {}
     for r in range(1, n + 1):
         for c in range(1, n + 1):
             for v in range(1, n + 1):
-                goal = atom('Is', r, c, v)
-                processed.clear()  # The supplied FC routine starts a fresh agenda.
-                if pl_fc_entails(kb, goal):
+                if atom('Is', r, c, v) in processed:
                     grid[(r, c)] = v
-                    # FC returns on its query before calling clauses_with_premise.
-                    steps.extend(trace_steps([goal], facts, why, n, emitted))
                     break
             else:
                 raise ValueError(f'No value could be established for cell ({r}, {c}).')
-    return {'grid': grid, 'steps': steps}
+    return {'grid': grid, 'steps': steps} if with_trace else grid
+
+
+def solve_full_grid_fc_with_trace(n, box_h, box_w, givens):
+    """Return the grid and walkthrough from the same single FC pass."""
+    return _solve_full_grid_fc(n, box_h, box_w, givens, with_trace=True)

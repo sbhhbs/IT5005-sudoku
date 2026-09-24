@@ -42,8 +42,9 @@ JSON-compatible. Steps follow the existing trace schema and reason labels.
 - The existing `solve_full_grid_fc/bc` functions still return **only a grid**.
   Traced helpers should share their inference engine with those functions.
 
-The course integration assumes valid supplied 9×9 puzzles. FC tracing follows the
-existing per-cell candidate-query strategy and observes the supplied FC routine.
+The course integration assumes valid supplied 9×9 puzzles. Both FC APIs run the
+supplied FC routine once with an absent query to exhaust its agenda. The grid and
+walkthrough come from that pass; candidate checks reuse the collected deductions.
 The existing BC trace helper is retained. No extra input-validation layer
 is required for this integration.
 

@@ -28,7 +28,10 @@ def test_fc_walkthrough_uses_supplied_fc_and_proves_the_grid(puzzle, monkeypatch
         if not clauses:
             clauses.extend(kb.clauses)
         calls.append(str(query))
-        return pl_fc_entails(kb, query)
+        before = list(kb.clauses)
+        result = pl_fc_entails(kb, query)
+        assert kb.clauses == before
+        return result
 
     def no_bc(*args, **kwargs):
         raise AssertionError('FC walkthrough must not run BC.')
@@ -37,10 +40,11 @@ def test_fc_walkthrough_uses_supplied_fc_and_proves_the_grid(puzzle, monkeypatch
     monkeypatch.setattr(solver, 'bc_ask', no_bc)
     result = solver.solve_full_grid_fc_with_trace(9, 3, 3, givens)
     assert result['grid'] == expected and givens == original
-    # Keep the existing per-cell candidate-query strategy.
-    assert calls == [str(solver.atom('Is', r, c, v))
-                     for r in range(1, 10) for c in range(1, 10)
-                     for v in range(1, expected[r, c] + 1)]
+    # Each API must invoke the supplied FC routine once, not once per candidate.
+    assert len(calls) == 1
+    calls.clear()
+    assert solver.solve_full_grid_fc(9, 3, 3, givens) == expected
+    assert len(calls) == 1 and givens == original
     rules = {(frozenset(map(str, conjuncts(clause.args[0]))), str(clause.args[1]))
              for clause in clauses if clause.op == '==>'}
     facts = {str(solver.atom('Is', r, c, v)) for (r, c), v in givens.items()}
@@ -71,3 +75,11 @@ def test_frontend_can_step_through_real_fc_walkthrough():
     app.slider(key='solve_walk_step').set_value(51).run()
     assert app.button(key='solve_walk_next').disabled
     assert not app.exception
+
+
+@pytest.mark.parametrize('solve', [solver.solve_full_grid_fc, solver.solve_full_grid_fc_with_trace])
+def test_single_pass_does_not_return_an_incomplete_grid(solve):
+    givens = {(1, 1): 1}
+    with pytest.raises(ValueError, match='No value could be established'):
+        solve(9, 3, 3, givens)
+    assert givens == {(1, 1): 1}
