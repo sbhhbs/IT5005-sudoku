@@ -1,8 +1,8 @@
 # Optional full-grid walkthrough extension
 
-This proposed optional interface supports Member 3's full-solve replay. It supplements the
+This optional interface supports Member 3's full-solve replay. Both helpers are implemented in the Member 2 integration follow-up. It supplements the
 [agreed solver/UI contract](solver-ui-contract.md); it does not change any of
-that contract's required function signatures or return types. Member 2 can
+that contract's required function signatures or return types. Other compatible backends can
 implement it separately from the core grid-only functions.
 
 ## Helpers
